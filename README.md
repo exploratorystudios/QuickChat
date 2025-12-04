@@ -77,7 +77,7 @@ The easiest way to install QuickChat is with the provided installation script:
 cd QuickChat
 
 # Run the installer (works on fresh systems too)
-./install.sh
+bash ./install.sh
 ```
 
 That's it! QuickChat will be installed and ready to launch.
@@ -131,7 +131,7 @@ matplotlib>=3.7.0     # For visualization
 ### Method 1: Automated Installation (Recommended)
 
 ```bash
-./install.sh
+bash ./install.sh
 ```
 
 The installer handles everything:
@@ -502,7 +502,7 @@ Error: Python executable not found at ~/.local/share/quickchat/app/venv/bin/pyth
 ```
 
 **Solution**:
-1. Reinstall QuickChat: `./uninstall.sh` then `./install.sh`
+1. Reinstall QuickChat: `bash ./uninstall.sh` then `bash ./install.sh`
 2. Verify venv was created: `ls ~/.local/share/quickchat/app/venv/bin/`
 3. Check Python installation: `python3 --version`
 
@@ -597,7 +597,7 @@ Error: Connection refused - is Ollama running?
 To remove QuickChat:
 
 ```bash
-./uninstall.sh
+bash ./uninstall.sh
 ```
 
 Choose whether to keep or remove your chat history. You can also manually remove it:
