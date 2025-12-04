@@ -89,7 +89,7 @@ It handles venv, dependencies, and desktop shortcuts.
 
 - **OS**: GNOME Linux (Ubuntu 20.04+, etc.) or Windows.
 - **Python**: 3.8+.
-- **RAM**: 4GB min (8GB+ recommended).
+- **VRAM**: 4GB min (8GB+ recommended).
 - **Ollama**: Local install with models.
 
 Dependencies (auto-installed): PySide6, ollama, SQLAlchemy, qasync, mistune, pygments, aiohttp, Pillow, matplotlib.
