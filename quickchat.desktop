@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=QuickChat
+Comment=Chat interface for Ollama models
+Exec=bash -c 'cd /home/thewindmage/Desktop/QuickChat && source venv/bin/activate && python3 main.py'
+Icon=/home/thewindmage/Desktop/QuickChat/icon.png
+Terminal=false
+Categories=Utility;Chat;
+StartupWMClass=QuickChat
+Path=/home/thewindmage/Desktop/QuickChat
