@@ -1,6 +1,7 @@
 # QuickChat
 
-A sleek, feature-rich chat interface for local LLM inference with Ollama on GNOME Linux or Windows with chat Forking feature.  
+A sleek, feature-rich chat interface for local LLM inference with Ollama on Linux or Windows with chat Forking feature.  
+NOTE: The install script **requires** GNOME to work.
 
 Welcome to **QuickChat**! 🎉 This desktop app brings a professional, intuitive experience to your local AI chats. Built with PySide6 for speed and style, it's designed to make interacting with Ollama models feel effortless and fun. Whether you're brainstorming ideas or analyzing images, QuickChat has you covered—all locally on your machine.  
 
