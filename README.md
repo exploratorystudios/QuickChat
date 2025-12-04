@@ -1,10 +1,10 @@
 # QuickChat
 
-> A sleek, feature-rich chat interface for local LLM inference with Ollama
+> A sleek, feature-rich chat interface for local LLM inference with Ollama on Windows or GNOME Linux environments.
 
 **QuickChat** is a powerful desktop application that provides a professional, user-friendly interface for interacting with large language models running locally on your machine via Ollama. Built with PySide6 and designed for optimal performance and responsiveness, QuickChat brings the sophistication of commercial chat interfaces to your local LLM setup.
 
-![QuickChat](icon.png)
+<img src="icon.png" alt="QuickChat" width="200" height="200">
 
 ## ✨ Features
 
@@ -23,11 +23,10 @@
 - **Vision-aware models**: Automatically detects vision capabilities and enables image features
 - **Smart image handling**: Only sends the most recent image to avoid redundant encoding
 - **Image preservation**: Chat history maintains image thumbnails and metadata
-- **Efficient streaming**: Images are cached and reused across conversations
 
 ### 💬 Intelligent Conversation Management
 
-- **Smart chat naming**: AI-generated titles for new conversations (without slowing down responses)
+- **Smart chat naming**: AI-generated titles for new conversations (without slowing down responses as it avoids thinking when doing so)
 - **Fork conversations**: Branch off from any message point to explore alternative paths
 - **Conversation history**: Full chat persistence with SQLite backend
 - **Export options**: Save chats as:
@@ -274,7 +273,7 @@ Thinking mode allows models to "reason through" complex problems before respondi
 
 Thinking is automatically enabled for models that support it. Models are detected automatically:
 - **Ollama native thinking** (qwen3, deepseek-r1, etc.): Uses API-level thinking parameters
-- **GGUF quantizations** (with `/think` support): Uses text directives for thinking
+- **GGUF quantizations** (with `/think` support via the "Thinking" button): Uses text directives for thinking
 
 ### Using Vision Mode
 
@@ -343,7 +342,6 @@ This is useful for exploring alternative conversation paths without losing your 
 - **Current model**: Shown in the dropdown at the top right
 - **Change model**: Select any available model from the dropdown
 - **Refresh list**: Click 🔄 **Refresh** to update available models
-  - Previously selected model is automatically restored after refresh
 - **Default model**: Set in Settings for new chats
 
 #### Settings
@@ -625,50 +623,12 @@ Contributions are welcome! Areas that could use help:
 - **Documentation**: Guides, examples, tutorials
 - **Bug fixes**: Issue reports with details
 
-## 📜 License
-
-This project is provided as-is for personal use and modification.
-
 ## 🙏 Acknowledgments
 
 - **Ollama**: For the amazing local LLM inference platform
 - **PySide6**: For the excellent Qt bindings
 - **Mistune**: For markdown rendering
 - **SQLAlchemy**: For database ORM
-
-## 📞 Support
-
-### Getting Help
-
-1. **Check troubleshooting** section above
-2. **Check GitHub issues** for similar problems
-3. **Review Ollama docs**: https://ollama.ai/
-4. **Check model capabilities**: `ollama show <model>`
-
-### Reporting Issues
-
-When reporting issues, include:
-- Your OS and version
-- Python version: `python3 --version`
-- Ollama version: `ollama --version`
-- Model name and version
-- Exact error message and steps to reproduce
-- Screenshot if UI-related
-
-## 🚀 Future Roadmap
-
-Planned features for future releases:
-
-- [ ] Multi-turn conversation tools (code execution, web search)
-- [ ] Prompt templates and presets
-- [ ] Custom system prompts per model
-- [ ] Conversation grouping and organization
-- [ ] Advanced search and filtering
-- [ ] Chat analytics and statistics
-- [ ] Plugin system for extensibility
-- [ ] Dark mode refinements
-- [ ] Keyboard shortcut customization
-- [ ] Model settings UI (temperature, top_p, etc.)
 
 ## 📝 Changelog
 
