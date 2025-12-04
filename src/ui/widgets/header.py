@@ -9,6 +9,7 @@ from src.ui.dialogs.model_change_notification import ModelChangeNotification
 class Header(QWidget):
     model_changed = Signal(str)
     settings_requested = Signal()
+    sidebar_toggle_requested = Signal()
 
     def __init__(self, on_detection_complete=None):
         super().__init__()
@@ -24,6 +25,14 @@ class Header(QWidget):
     def setup_ui(self):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(20, 0, 20, 0)
+
+        # Sidebar Toggle Button (left side, beside title)
+        self.toggle_sidebar_btn = QPushButton("◀")
+        self.toggle_sidebar_btn.setObjectName("SidebarToggleButton")
+        self.toggle_sidebar_btn.setFixedSize(32, 32)
+        self.toggle_sidebar_btn.setToolTip("Hide sidebar")
+        self.toggle_sidebar_btn.clicked.connect(self.on_toggle_sidebar)
+        layout.addWidget(self.toggle_sidebar_btn)
 
         # Title
         title = QLabel("QuickChat")
@@ -155,3 +164,12 @@ class Header(QWidget):
         """Disable model selector during message generation to prevent async conflicts."""
         self.is_generating = is_generating
         self.model_selector.setEnabled(not is_generating)
+
+    def on_toggle_sidebar(self):
+        """Emit signal to toggle sidebar."""
+        self.sidebar_toggle_requested.emit()
+
+    def set_sidebar_collapsed(self, is_collapsed):
+        """Update toggle button appearance based on sidebar state."""
+        self.toggle_sidebar_btn.setText("▶" if is_collapsed else "◀")
+        self.toggle_sidebar_btn.setToolTip("Show sidebar" if is_collapsed else "Hide sidebar")

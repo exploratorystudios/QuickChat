@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-                               QLineEdit, QListWidget, QListWidgetItem, QLabel)
-from PySide6.QtCore import Signal, Qt, QSize, QTimer
+                               QLineEdit, QListWidget, QListWidgetItem, QLabel, QGraphicsOpacityEffect)
+from PySide6.QtCore import Signal, Qt, QSize, QTimer, QPropertyAnimation, QEasingCurve, QParallelAnimationGroup, QAbstractAnimation
 from PySide6.QtGui import QIcon
 from src.services.chat_manager import chat_manager
 
@@ -8,11 +8,21 @@ class Sidebar(QWidget):
     chat_selected = Signal(int) # Emits chat_id
     new_chat_requested = Signal()
     chat_deleted = Signal(int) # Emits deleted chat_id
+    collapse_state_changed = Signal(bool)  # Emits True when collapsed, False when expanded
 
     def __init__(self):
         super().__init__()
         self.setObjectName("Sidebar")
-        self.setFixedWidth(280)
+        self.min_width = 280
+        self.collapsed_width = 60
+        self.is_collapsed = False
+        self.animation_group = None
+        self.fade_animation_group = None
+        self._fade_timer = None
+
+        # Store effects to prevent garbage collection during animation
+        self._element_effects = {}  # {element: QGraphicsOpacityEffect}
+        self._animation_pool = []  # Keep all animations alive
 
         # Typing animation tracking
         self.typing_timer = QTimer()
@@ -29,17 +39,17 @@ class Sidebar(QWidget):
         layout.setSpacing(10)
 
         # Header / New Chat
-        header_layout = QHBoxLayout()
+        self.header_layout = QHBoxLayout()
         self.new_chat_btn = QPushButton("New Chat")
         self.new_chat_btn.setObjectName("PrimaryButton")
         self.new_chat_btn.clicked.connect(self.on_new_chat)
-        header_layout.addWidget(self.new_chat_btn)
-        
+        self.header_layout.addWidget(self.new_chat_btn)
+
         self.import_btn = QPushButton("Import")
         self.import_btn.clicked.connect(self.on_import_chat)
-        header_layout.addWidget(self.import_btn)
-        
-        layout.addLayout(header_layout)
+        self.header_layout.addWidget(self.import_btn)
+
+        layout.addLayout(self.header_layout)
 
         # Search
         self.search_input = QLineEdit()
@@ -51,6 +61,11 @@ class Sidebar(QWidget):
         self.chat_list = QListWidget()
         self.chat_list.itemClicked.connect(self.on_chat_clicked)
         layout.addWidget(self.chat_list)
+
+        # Set initial width
+        self.setMinimumWidth(self.min_width)
+        self.setMaximumWidth(self.min_width)
+
 
     def load_chats(self):
         self.chat_list.clear()
@@ -213,3 +228,166 @@ class Sidebar(QWidget):
         for i in range(self.chat_list.count()):
             item = self.chat_list.item(i)
             item.setHidden(text.lower() not in item.text().lower())
+
+
+    def toggle_collapse(self):
+        """Toggle sidebar collapse/expand state with smooth animation."""
+        if self.is_collapsed:
+            self.expand()
+        else:
+            self.collapse()
+
+    def collapse(self):
+        """Collapse the sidebar with smooth animation."""
+        if self.is_collapsed:
+            return
+
+        self.is_collapsed = True
+
+        # Fade out elements while animating width
+        self._animate_fade_out()
+        self._animate_width(self.min_width, self.collapsed_width)
+
+        self.collapse_state_changed.emit(True)
+
+    def expand(self):
+        """Expand the sidebar with smooth animation."""
+        if not self.is_collapsed:
+            return
+
+        self.is_collapsed = False
+
+        # Prevent widgets from being visible during width animation
+        # Set max size to 0 so layout doesn't render them
+        elements = [self.new_chat_btn, self.import_btn, self.search_input, self.chat_list]
+        for element in elements:
+            element.setMaximumHeight(0)
+
+        # Animate width first
+        self._animate_width(self.collapsed_width, self.min_width)
+
+        # Start fade in after width animation completes
+        self._start_fade_in_timer()
+
+        self.collapse_state_changed.emit(False)
+
+    def _animate_width(self, start_width, end_width):
+        """Animate sidebar width smoothly using geometry."""
+        if self.animation_group:
+            self.animation_group.stop()
+
+        self.animation_group = QParallelAnimationGroup()
+
+        # Animate minimum width
+        min_width_anim = QPropertyAnimation(self, b"minimumWidth")
+        min_width_anim.setDuration(300)
+        min_width_anim.setStartValue(start_width)
+        min_width_anim.setEndValue(end_width)
+        min_width_anim.setEasingCurve(QEasingCurve.InOutCubic)
+
+        # Animate maximum width
+        max_width_anim = QPropertyAnimation(self, b"maximumWidth")
+        max_width_anim.setDuration(300)
+        max_width_anim.setStartValue(start_width)
+        max_width_anim.setEndValue(end_width)
+        max_width_anim.setEasingCurve(QEasingCurve.InOutCubic)
+
+        self.animation_group.addAnimation(min_width_anim)
+        self.animation_group.addAnimation(max_width_anim)
+        self.animation_group.start()
+
+    def _animate_fade_out(self):
+        """Fade out UI elements smoothly."""
+        elements = [self.new_chat_btn, self.import_btn, self.search_input, self.chat_list]
+
+        # Stop any existing fade animation ONLY if it's running
+        if self.fade_animation_group and self.fade_animation_group.state() == QAbstractAnimation.Running:
+            self.fade_animation_group.stop()
+
+        # Create new animation group
+        self.fade_animation_group = QParallelAnimationGroup()
+
+        for element in elements:
+            # Create fresh effect for this fade out
+            effect = QGraphicsOpacityEffect()
+            element.setGraphicsEffect(effect)
+            effect.setOpacity(1.0)
+
+            # Store in pool to keep alive
+            self._element_effects[element] = effect
+
+            fade_anim = QPropertyAnimation(effect, b"opacity")
+            fade_anim.setDuration(300)  # Match width animation duration for synchronized fade
+            fade_anim.setStartValue(1.0)
+            fade_anim.setEndValue(0.0)
+            fade_anim.setEasingCurve(QEasingCurve.InOutQuad)
+
+            self.fade_animation_group.addAnimation(fade_anim)
+
+        # Keep animation group alive to prevent garbage collection of effects
+        self._animation_pool.append(self.fade_animation_group)
+        # Cleanup old animation groups to prevent memory leak (keep last 10)
+        if len(self._animation_pool) > 10:
+            self._animation_pool.pop(0)
+
+        self.fade_animation_group.start()
+
+    def _hide_fade_elements(self):
+        """Hide elements after fade out completes."""
+        # Elements are now invisible (opacity 0) but still exist
+        # No need to hide or disable - they're invisible and won't respond to clicks
+        pass
+
+    def _start_fade_in_timer(self):
+        """Start fade in after width animation completes (300ms)."""
+        # Use a timer to start fade in when width animation finishes
+        fade_start_timer = QTimer()
+        fade_start_timer.setSingleShot(True)
+        fade_start_timer.timeout.connect(self._animate_fade_in)
+        fade_start_timer.start(300)  # Match width animation duration
+        # Store timer reference to prevent garbage collection
+        self._fade_timer = fade_start_timer
+
+    def _animate_fade_in(self):
+        """Fade in UI elements smoothly."""
+        elements = [self.new_chat_btn, self.import_btn, self.search_input, self.chat_list]
+
+        # Stop any existing fade animation ONLY if it's running
+        if self.fade_animation_group and self.fade_animation_group.state() == QAbstractAnimation.Running:
+            self.fade_animation_group.stop()
+
+        self.fade_animation_group = QParallelAnimationGroup()
+
+        # FIRST: Set up all effects and properties BEFORE showing or starting animation
+        for element in elements:
+            # Restore max height that was set to 0 during expand
+            element.setMaximumHeight(16777215)  # Qt's default max height
+
+            # Create fresh effect for this fade in
+            effect = QGraphicsOpacityEffect()
+            element.setGraphicsEffect(effect)
+            effect.setOpacity(0.0)  # Start invisible
+
+            # Store in pool to keep alive
+            self._element_effects[element] = effect
+
+            fade_anim = QPropertyAnimation(effect, b"opacity")
+            fade_anim.setDuration(200)
+            fade_anim.setStartValue(0.0)
+            fade_anim.setEndValue(1.0)
+            fade_anim.setEasingCurve(QEasingCurve.InOutQuad)
+
+            self.fade_animation_group.addAnimation(fade_anim)
+
+        # ONLY NOW show the widgets (after effects are applied and opacity set to 0)
+        for element in elements:
+            element.show()
+
+        # Keep animation group alive to prevent garbage collection of effects
+        self._animation_pool.append(self.fade_animation_group)
+        # Cleanup old animation groups to prevent memory leak (keep last 10)
+        if len(self._animation_pool) > 10:
+            self._animation_pool.pop(0)
+
+        # THEN: Start the animation
+        self.fade_animation_group.start()

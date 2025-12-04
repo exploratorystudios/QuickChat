@@ -61,6 +61,7 @@ def get_stylesheet(theme_mode="dark"):
     QWidget#Sidebar {{
         background-color: {colors['background']};
         border-right: 1px solid {colors['border']};
+        min-width: 280px;
     }}
     
     QListWidget {{
@@ -148,6 +149,25 @@ def get_stylesheet(theme_mode="dark"):
     
     QPushButton#PrimaryButton:hover {{
         background-color: {colors['primary_dark']};
+    }}
+
+    QPushButton#SidebarToggleButton {{
+        background-color: transparent;
+        border: 1px solid {colors['border']};
+        border-radius: 6px;
+        color: {colors['text_primary']};
+        font-weight: 600;
+        font-size: 16px;
+        padding: 2px;
+    }}
+
+    QPushButton#SidebarToggleButton:hover {{
+        background-color: {colors['surface']};
+        border: 1px solid {colors['primary']};
+    }}
+
+    QPushButton#SidebarToggleButton:pressed {{
+        background-color: {colors['surface_light']};
     }}
 
     /* Header */

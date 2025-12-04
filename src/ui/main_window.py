@@ -54,6 +54,7 @@ class MainWindow(QMainWindow):
         self.sidebar.chat_selected.connect(self.load_chat)
         self.sidebar.new_chat_requested.connect(self.create_new_chat)
         self.sidebar.chat_deleted.connect(self.handle_chat_deleted)
+        self.sidebar.collapse_state_changed.connect(self.on_sidebar_collapse_state_changed)
         main_layout.addWidget(self.sidebar, stretch=1)
         
         # Right Side (Header + Chat + Input)
@@ -65,6 +66,7 @@ class MainWindow(QMainWindow):
         self.header = Header(on_detection_complete=self._on_detection_complete)
         self.header.settings_requested.connect(self.apply_settings)
         self.header.model_changed.connect(self.on_model_changed)
+        self.header.sidebar_toggle_requested.connect(self.toggle_sidebar)
         self.chat_area = ChatArea()
         self.chat_area.fork_requested.connect(self.handle_fork_chat)
         self.input_area = InputArea()
@@ -109,6 +111,14 @@ class MainWindow(QMainWindow):
     def on_model_changed(self, model_name):
         """Handle model selection change signal."""
         print(f"[MainWindow] Model changed signal for: {model_name}")
+
+    def toggle_sidebar(self):
+        """Toggle sidebar collapse/expand."""
+        self.sidebar.toggle_collapse()
+
+    def on_sidebar_collapse_state_changed(self, is_collapsed):
+        """Update header button when sidebar collapse state changes."""
+        self.header.set_sidebar_collapsed(is_collapsed)
 
     def apply_settings(self):
         """Apply settings from SettingsManager."""
