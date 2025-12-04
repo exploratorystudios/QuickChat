@@ -203,15 +203,17 @@ class OllamaClient:
             capabilities = await self.get_model_capabilities(model)
             thinking_method = capabilities.get('thinking_method')
 
-            # For directive-based models, prepend /think or /no_think to the first user message
+            # For directive-based models, prepend /think or /no_think to ALL user messages
             if thinking_method == 'directive' and messages:
-                # Find the first user message and prepend directive
+                directive = '/think' if enable_thinking else '/no_think'
+                count = 0
+                # Add directive to all user messages to maintain consistent thinking behavior
                 for msg in messages:
                     if msg.get('role') == 'user':
-                        directive = '/think' if enable_thinking else '/no_think'
                         msg['content'] = f"{directive}\n{msg['content']}"
-                        print(f"[ChatStream] Added directive '{directive}' to first user message for {model}")
-                        break
+                        count += 1
+                if count > 0:
+                    print(f"[ChatStream] Added directive '{directive}' to {count} user message(s) for {model}")
 
             # Build chat kwargs - only add 'think' parameter for parameter-based models
             chat_kwargs = {

@@ -15,7 +15,8 @@ class InputArea(QWidget):
         self.thinking_supported = True  # Track if current model supports thinking
         self.vision_enabled = False  # Track if vision is enabled
         self.vision_supported = False  # Track if current model supports vision
-        self.is_generating = False  # Track if model is currently generating
+        self.is_generating = False  # Track if model is currently generating (response)
+        self.is_generating_title = False  # Track if title is being generated
         self.attached_image_path = None  # Store path to attached image
         self.setup_ui()
         # Set initial height to minimum (text input + buttons + margins)
@@ -142,8 +143,8 @@ class InputArea(QWidget):
     def eventFilter(self, obj, event):
         if obj == self.text_input and event.type() == QEvent.KeyPress:
             if event.key() == Qt.Key_Return and not event.modifiers() & Qt.ShiftModifier:
-                # Only send if not currently generating
-                if not self.is_generating:
+                # Only send if not currently generating (response or title)
+                if not self.is_generating and not self.is_generating_title:
                     self.on_send()
                 return True
         return super().eventFilter(obj, event)
@@ -333,9 +334,10 @@ class InputArea(QWidget):
         self.vision_toggled.emit(self.vision_enabled)
 
     def on_send(self):
-        # If currently generating, emit stop signal instead
-        if self.is_generating:
-            self.stop_requested.emit()
+        # If generating title OR response, don't allow sending
+        # During response generation: silently ignore to prevent accidental sends during setup gap
+        # During title generation: silently ignore to prevent interference
+        if self.is_generating_title or self.is_generating:
             return
 
         content = self.text_input.toPlainText().strip()
@@ -430,6 +432,16 @@ class InputArea(QWidget):
     def is_stop_requested(self):
         """Returns True if user clicked Stop."""
         return self.is_generating
+
+    def set_generating_title(self, is_generating):
+        """
+        Set the title generation state.
+        When title is being generated, user cannot send messages (silently blocked).
+
+        Args:
+            is_generating (bool): Whether the title is currently being generated.
+        """
+        self.is_generating_title = is_generating
 
     def set_vision_supported(self, supported):
         """

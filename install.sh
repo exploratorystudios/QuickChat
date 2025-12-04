@@ -80,7 +80,7 @@ rm -rf "$INSTALL_DIR/src"  # Remove old src to ensure clean update
 cp -r "$PROJECT_DIR/src" "$INSTALL_DIR/"
 cp "$PROJECT_DIR/main.py" "$INSTALL_DIR/"
 cp "$PROJECT_DIR/config" "$INSTALL_DIR/" 2>/dev/null || true
-cp "$ICON_SOURCE" "$INSTALL_DIR/icon.png"
+cp -f "$ICON_SOURCE" "$INSTALL_DIR/icon.png"  # Force overwrite icon
 cp "$PROJECT_DIR/requirements.txt" "$INSTALL_DIR/"
 echo -e "${GREEN}✓ Source files updated${NC}"
 echo ""
@@ -168,6 +168,17 @@ if command -v update-desktop-database &> /dev/null; then
     echo -e "${GREEN}✓ Desktop cache updated${NC}"
 else
     echo -e "${YELLOW}⚠ update-desktop-database not found, skipping cache update${NC}"
+fi
+
+# Clear icon cache to force GNOME to reload the icon
+# Use gtk-update-icon-cache if available (safer than deleting cache folder)
+if command -v gtk-update-icon-cache &> /dev/null; then
+    gtk-update-icon-cache "$HOME/.local/share/icons/hicolor/" 2>/dev/null || true
+    echo -e "${GREEN}✓ Icon cache refreshed${NC}"
+elif [ -d "$HOME/.cache" ]; then
+    # Fallback: touch a marker file to invalidate cache (gentler than deletion)
+    touch "$HOME/.cache/.icon-cache-invalidate"
+    echo -e "${GREEN}✓ Icon cache invalidated${NC}"
 fi
 echo ""
 

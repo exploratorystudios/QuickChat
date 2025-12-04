@@ -93,6 +93,8 @@ class MainWindow(QMainWindow):
 
     def set_generating_title(self, is_generating):
         """Disable model selector and sidebar during title generation."""
+        self.generating_title = is_generating
+        self.input_area.is_generating_title = is_generating
         self.header.model_selector.setEnabled(not is_generating)
         self.update_sidebar_buttons()
 
@@ -356,16 +358,19 @@ class MainWindow(QMainWindow):
                     # Only generate title if we have a reasonable response
                     if full_response and len(full_response.strip()) > 10:
                         print(f"Generating smart title for chat {self.current_chat_id}...")
-                        self.generating_title = True
                         self.set_generating_title(True)
                         try:
                             new_title = ""
-                            # Stream the title generation and update as chunks arrive
+                            # Buffer the title generation (collect all chunks)
                             async for title_chunk in ollama_service.generate_chat_title(content, full_response, model):
                                 new_title += title_chunk
-                                # Update chat title in real-time as it's being generated
+
+                            # Save the final title to database
+                            if new_title and new_title.strip():
                                 chat_manager.update_chat_title(self.current_chat_id, new_title)
-                                self.sidebar.load_chats()
+
+                            # Animate the title in the sidebar with smooth typing effect
+                            self.sidebar.update_chat_title(self.current_chat_id, new_title.strip() if new_title else "", animate=True)
 
                             if new_title and new_title.strip():
                                 print(f"Chat title updated to: {new_title}")
@@ -375,7 +380,6 @@ class MainWindow(QMainWindow):
                                 chat_manager.update_chat_title(self.current_chat_id, fallback_title)
                                 self.sidebar.load_chats()
                         finally:
-                            self.generating_title = False
                             self.set_generating_title(False)
                     else:
                         # Response too short, use fallback title
@@ -384,7 +388,6 @@ class MainWindow(QMainWindow):
                         self.sidebar.load_chats()
             except Exception as e:
                 print(f"Error generating chat title: {e}")
-                self.generating_title = False
                 self.set_generating_title(False)
                 fallback_title = content[:30] + "..." if len(content) > 30 else content
                 chat_manager.update_chat_title(self.current_chat_id, fallback_title)

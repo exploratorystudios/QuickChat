@@ -1,6 +1,6 @@
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                                QLineEdit, QListWidget, QListWidgetItem, QLabel)
-from PySide6.QtCore import Signal, Qt, QSize
+from PySide6.QtCore import Signal, Qt, QSize, QTimer
 from PySide6.QtGui import QIcon
 from src.services.chat_manager import chat_manager
 
@@ -13,6 +13,13 @@ class Sidebar(QWidget):
         super().__init__()
         self.setObjectName("Sidebar")
         self.setFixedWidth(280)
+
+        # Typing animation tracking
+        self.typing_timer = QTimer()
+        self.typing_timer.timeout.connect(self._on_typing_tick)
+        self.typing_queue = {}  # {chat_id: {'full_text': str, 'displayed': int, 'item': QListWidgetItem}}
+        self.typing_speed = 25  # milliseconds per character (40 chars/sec)
+
         self.setup_ui()
         self.load_chats()
 
@@ -52,6 +59,63 @@ class Sidebar(QWidget):
             item = QListWidgetItem(chat.title)
             item.setData(Qt.UserRole, chat.id)
             self.chat_list.addItem(item)
+
+    def update_chat_title(self, chat_id, new_title, animate=True):
+        """
+        Update the title of a specific chat in the list.
+
+        Args:
+            chat_id: The ID of the chat to update
+            new_title: The new title text
+            animate: If True, use smooth typing animation. If False, update immediately.
+        """
+        for i in range(self.chat_list.count()):
+            item = self.chat_list.item(i)
+            if item.data(Qt.UserRole) == chat_id:
+                if animate and new_title:
+                    # Queue this chat for typing animation
+                    self.typing_queue[chat_id] = {
+                        'full_text': new_title,
+                        'displayed': 0,
+                        'item': item
+                    }
+                    # Start the animation timer if not already running
+                    if not self.typing_timer.isActive():
+                        self.typing_timer.start(self.typing_speed)
+                else:
+                    # Immediate update
+                    item.setText(new_title)
+                    # Remove from typing queue if present
+                    if chat_id in self.typing_queue:
+                        del self.typing_queue[chat_id]
+                break
+
+    def _on_typing_tick(self):
+        """Called by timer to advance typing animation for all queued chats."""
+        completed_chats = []
+
+        for chat_id, animation_data in self.typing_queue.items():
+            full_text = animation_data['full_text']
+            displayed = animation_data['displayed']
+            item = animation_data['item']
+
+            # Advance by 1 character
+            if displayed < len(full_text):
+                displayed += 1
+                animation_data['displayed'] = displayed
+                # Update item with partial text
+                item.setText(full_text[:displayed])
+            else:
+                # Animation complete
+                completed_chats.append(chat_id)
+
+        # Remove completed animations from queue
+        for chat_id in completed_chats:
+            del self.typing_queue[chat_id]
+
+        # Stop timer if no more animations
+        if not self.typing_queue:
+            self.typing_timer.stop()
 
     def on_new_chat(self):
         self.new_chat_requested.emit()
