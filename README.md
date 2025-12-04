@@ -48,7 +48,7 @@ QuickChat packs powerful tools into a clean interface. Here's what you'll love:
 - **Themes**: Dark/Light with auto-save.
 - **Animations**: Smooth notifications and transitions.
 - **Streaming**: Real-time response generation.
-- **Shortcuts**: Enter to send, Ctrl+Enter for newline.
+- **Shortcuts**: Enter to send, Ctrl+Enter or Shift+Enter for newline.
 - **Responsive**: Adapts to any window size.
 
 ### 🛡️ Safeguards
