@@ -118,7 +118,9 @@ python3 main.py
 ```
 
 ### Windows
-Double-click `setup.bat` (installs venv/deps), then `run.bat` to launch. Manual:
+Double-click `setup.bat` (installs venv/deps), then `run.bat` to launch. 
+
+Manual:
 ```cmd
 python -m venv venv
 venv\Scripts\activate.bat
