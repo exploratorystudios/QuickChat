@@ -6,7 +6,8 @@ NOTE: The install script **requires GNOME** to work.
 Welcome to **QuickChat**! 🎉 This desktop app brings a professional, intuitive experience to your local AI chats. Built with PySide6 for speed and style, it's designed to make interacting with Ollama models feel effortless and fun. Whether you're brainstorming ideas or analyzing images, QuickChat has you covered—all locally on your machine.  
 
 <img src="icon.png" alt="QuickChat Icon" width="200" height="200">
-<img width="1228" height="866" alt="image" src="https://github.com/user-attachments/assets/4f746578-4547-4a36-9d38-939a13e69570" />
+<img width="1228" height="866" alt="image" src="https://github.com/user-attachments/assets/132bebcf-a52d-45ea-8657-536d20f12bdd" />
+
 
 
 ## Table of Contents
