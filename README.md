@@ -5,7 +5,8 @@ A sleek, feature-rich chat interface for local LLM inference with Ollama on GNOM
 Welcome to **QuickChat**! 🎉 This desktop app brings a professional, intuitive experience to your local AI chats. Built with PySide6 for speed and style, it's designed to make interacting with Ollama models feel effortless and fun. Whether you're brainstorming ideas or analyzing images, QuickChat has you covered—all locally on your machine.  
 
 <img src="icon.png" alt="QuickChat Icon" width="200" height="200">
-![GUI Example](https://github.com/exploratorystudios/QuickChat/blob/main/gui.png)
+<img width="1228" height="866" alt="image" src="https://github.com/user-attachments/assets/4f746578-4547-4a36-9d38-939a13e69570" />
+
 
 ## Table of Contents
 - [Features](#-features)
