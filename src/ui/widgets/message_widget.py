@@ -92,6 +92,7 @@ class CodeCopyTextBrowser(QTextBrowser):
 
 class MessageWidget(QWidget):
     fork_requested = Signal(int) # Emits message_id
+    stream_updated = Signal()  # Emitted when smooth streaming display advances
 
     def __init__(self, role, content, thinking_content=None, message_id=None, images=None):
         super().__init__()
@@ -103,6 +104,13 @@ class MessageWidget(QWidget):
         self.is_streaming = False
         self.thinking_animation = None
         self.code_copied_label = None  # For showing "Code copied!" feedback
+
+        # Smooth streaming state
+        self._stream_target = ""       # Full text received from stream so far
+        self._stream_displayed = 0     # Number of characters currently revealed
+        self._stream_timer = None      # QTimer for smooth character reveal
+        self._is_streaming_response = False
+
         self.setup_ui()
 
     def setup_ui(self):
@@ -524,6 +532,66 @@ class MessageWidget(QWidget):
         except RuntimeError:
             # Widget has been deleted, silently ignore
             pass
+
+    def start_streaming(self):
+        """Initialize smooth streaming mode with timer-based character reveal."""
+        self._stream_target = ""
+        self._stream_displayed = 0
+        self._is_streaming_response = True
+        if not self._stream_timer:
+            self._stream_timer = QTimer()
+            self._stream_timer.setTimerType(Qt.PreciseTimer)
+            self._stream_timer.timeout.connect(self._stream_tick)
+        self._stream_timer.start(16)  # ~60fps for smooth animation
+
+    def stream_token(self, full_text):
+        """Update the target text for smooth reveal during streaming."""
+        self._stream_target = full_text
+
+    def _stream_tick(self):
+        """Advance the displayed text by an adaptive number of characters."""
+        try:
+            target_len = len(self._stream_target)
+            if self._stream_displayed >= target_len:
+                return  # Nothing new to reveal
+
+            buffer_size = target_len - self._stream_displayed
+            # Adaptive speed: drain the buffer in ~150ms regardless of burst size
+            chars = max(1, (buffer_size * 16) // 150)
+
+            self._stream_displayed = min(self._stream_displayed + chars, target_len)
+            displayed_text = self._stream_target[:self._stream_displayed]
+
+            # Update content and render (skip LaTeX during streaming for performance)
+            self.content = displayed_text
+            self.standard_content = displayed_text
+            html_content = mistune.html(displayed_text)
+            enhanced_html = self.enhance_html_with_copy_buttons(html_content)
+
+            if not self.bubble or not hasattr(self.bubble, 'setHtml'):
+                return
+
+            self.bubble.setHtml(enhanced_html)
+            self.adjust_heights()
+            self.stream_updated.emit()
+        except RuntimeError:
+            # Widget has been deleted, stop the timer
+            if self._stream_timer:
+                self._stream_timer.stop()
+
+    def finish_streaming(self):
+        """Stop the smooth reveal timer and do a full render with LaTeX."""
+        if self._stream_timer:
+            self._stream_timer.stop()
+        self._is_streaming_response = False
+
+        # Show all remaining text with full rendering pipeline
+        if self._stream_target:
+            self.content = self._stream_target
+            self.standard_content = self._stream_target
+        self.finalize_response()
+        self._stream_target = ""
+        self._stream_displayed = 0
 
     def finalize_response(self):
         """Process LaTeX in the final response after streaming is complete."""

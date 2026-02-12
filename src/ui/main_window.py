@@ -231,6 +231,11 @@ class MainWindow(QMainWindow):
         """Handle stop button click."""
         self.stop_requested = True
 
+    def _on_stream_content_updated(self):
+        """Scroll to bottom when smooth streaming reveals new content."""
+        if not self.chat_area.user_scrolled_up:
+            self.chat_area.scroll_to_bottom()
+
     @qasync.asyncSlot(str, str)
     async def handle_send_message(self, content, image_path=""):
         """Handle sending a message with optional image."""
@@ -283,6 +288,8 @@ class MainWindow(QMainWindow):
 
         # Prepare Assistant Message Placeholder
         assistant_widget = self.chat_area.add_message("assistant", "", "", None)
+        assistant_widget.start_streaming()
+        assistant_widget.stream_updated.connect(self._on_stream_content_updated)
         full_response = ""
         full_thinking = ""
         has_scrolled_for_response = False
@@ -340,10 +347,8 @@ class MainWindow(QMainWindow):
                 content_chunk = chunk.get('content', '')
                 if content_chunk:
                     full_response += content_chunk
-                    assistant_widget.update_response(full_response)
-                    # Only scroll if user hasn't manually scrolled up
-                    if not self.chat_area.user_scrolled_up:
-                        self.chat_area.scroll_to_bottom()
+                    assistant_widget.stream_token(full_response)
+                    # Scrolling handled by stream_updated signal
         except RuntimeError as e:
             # Suppress expected httpcore GeneratorExit errors when stopping
             if "async generator ignored GeneratorExit" not in str(e):
@@ -357,6 +362,8 @@ class MainWindow(QMainWindow):
             if not full_response:
                 full_response = f"[Error: {str(e)}]"
         finally:
+            # Flush remaining buffered text and do full render with LaTeX
+            assistant_widget.finish_streaming()
             # Stop thinking animation when streaming is complete
             assistant_widget.stop_thinking_animation()
             # Reset UI from generating state

@@ -348,10 +348,13 @@ class InputArea(QWidget):
         self.vision_toggled.emit(self.vision_enabled)
 
     def on_send(self):
-        # If generating title OR response, don't allow sending
-        # During response generation: silently ignore to prevent accidental sends during setup gap
         # During title generation: silently ignore to prevent interference
-        if self.is_generating_title or self.is_generating:
+        if self.is_generating_title:
+            return
+
+        # During response generation: emit stop signal
+        if self.is_generating:
+            self.stop_requested.emit()
             return
 
         content = self.text_input.toPlainText().strip()
