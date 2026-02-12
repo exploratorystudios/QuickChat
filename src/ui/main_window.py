@@ -339,10 +339,8 @@ class MainWindow(QMainWindow):
                 thinking_chunk = chunk.get('thinking', '')
                 if thinking_chunk:
                     full_thinking += thinking_chunk
-                    assistant_widget.update_thinking(full_thinking)
-                    # Only scroll if user hasn't manually scrolled up
-                    if not self.chat_area.user_scrolled_up:
-                        self.chat_area.scroll_to_bottom()
+                    assistant_widget.stream_thinking(full_thinking)
+                    # Scrolling handled by stream_updated signal
 
                 content_chunk = chunk.get('content', '')
                 if content_chunk:

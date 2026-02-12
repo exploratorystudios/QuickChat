@@ -16,10 +16,81 @@ import mistune
 import re
 import json
 import os
+import time
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QTextBrowser, QGroupBox, QToolButton, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QApplication, QHBoxLayout, QScrollArea, QFrame
 from PySide6.QtGui import QFont, QColor, QPixmap
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, Property, QUrl, QTimer
 from src.services.latex_processor import LaTeXProcessor
+
+
+class _StreamBuffer:
+    """Manages smooth character-by-character reveal paced to token arrival rate."""
+
+    def __init__(self):
+        self.target = ""
+        self.displayed = 0
+        self.fractional = 0.0
+        self.arrival_rate = 0.0  # chars/sec exponential moving average
+        self._last_token_time = None
+
+    def push(self, full_text):
+        """Update target text and track token arrival rate."""
+        now = time.monotonic()
+        new_chars = len(full_text) - len(self.target)
+        if self._last_token_time is not None and new_chars > 0:
+            elapsed = now - self._last_token_time
+            if elapsed > 0.001:
+                instant_rate = new_chars / elapsed
+                if self.arrival_rate == 0:
+                    self.arrival_rate = instant_rate
+                else:
+                    self.arrival_rate = 0.2 * instant_rate + 0.8 * self.arrival_rate
+        if new_chars > 0:
+            self._last_token_time = now
+        self.target = full_text
+
+    def advance(self, tick_ms=16):
+        """Advance reveal position. Returns (displayed_text, changed)."""
+        target_len = len(self.target)
+        if self.displayed >= target_len:
+            return self.target[:self.displayed], False
+
+        buffer_size = target_len - self.displayed
+
+        if self.arrival_rate > 0:
+            # Reveal at 90% of arrival rate to stay just behind the stream
+            chars_per_tick = self.arrival_rate * (tick_ms / 1000) * 0.9
+            self.fractional += chars_per_tick
+            chars = int(self.fractional)
+            if chars > 0:
+                self.fractional -= chars
+            elif buffer_size > 200:
+                chars = buffer_size // 5
+                self.fractional = 0.0
+            else:
+                return self.target[:self.displayed], False
+            # Safety: if buffer is very large, accelerate to catch up
+            if buffer_size > 200:
+                chars = max(chars, buffer_size // 5)
+        else:
+            # No rate info yet, use conservative fallback
+            chars = max(1, (buffer_size * tick_ms) // 150)
+
+        self.displayed = min(self.displayed + chars, target_len)
+        return self.target[:self.displayed], True
+
+    def flush(self):
+        """Reveal all remaining text immediately."""
+        self.displayed = len(self.target)
+        return self.target
+
+    def reset(self):
+        """Reset all state."""
+        self.target = ""
+        self.displayed = 0
+        self.fractional = 0.0
+        self.arrival_rate = 0.0
+        self._last_token_time = None
 
 class CodeCopyTextBrowser(QTextBrowser):
     """Custom QTextBrowser that handles copy code button clicks."""
@@ -106,9 +177,9 @@ class MessageWidget(QWidget):
         self.code_copied_label = None  # For showing "Code copied!" feedback
 
         # Smooth streaming state
-        self._stream_target = ""       # Full text received from stream so far
-        self._stream_displayed = 0     # Number of characters currently revealed
-        self._stream_timer = None      # QTimer for smooth character reveal
+        self._content_buffer = _StreamBuffer()
+        self._thinking_buffer = _StreamBuffer()
+        self._stream_timer = None
         self._is_streaming_response = False
 
         self.setup_ui()
@@ -535,8 +606,8 @@ class MessageWidget(QWidget):
 
     def start_streaming(self):
         """Initialize smooth streaming mode with timer-based character reveal."""
-        self._stream_target = ""
-        self._stream_displayed = 0
+        self._content_buffer.reset()
+        self._thinking_buffer.reset()
         self._is_streaming_response = True
         if not self._stream_timer:
             self._stream_timer = QTimer()
@@ -545,35 +616,47 @@ class MessageWidget(QWidget):
         self._stream_timer.start(16)  # ~60fps for smooth animation
 
     def stream_token(self, full_text):
-        """Update the target text for smooth reveal during streaming."""
-        self._stream_target = full_text
+        """Update the target content text for smooth reveal during streaming."""
+        self._content_buffer.push(full_text)
+
+    def stream_thinking(self, full_thinking):
+        """Update the target thinking text for smooth reveal during streaming."""
+        stripped = full_thinking.strip()
+        # Show button and start pulsing animation immediately (don't wait for reveal)
+        if self.role == "assistant":
+            self.show_thinking_btn.setVisible(bool(stripped))
+            if stripped and not self.is_streaming:
+                self.start_thinking_animation()
+        self._thinking_buffer.push(stripped)
 
     def _stream_tick(self):
-        """Advance the displayed text by an adaptive number of characters."""
+        """Advance both content and thinking displays, paced to token arrival rate."""
         try:
-            target_len = len(self._stream_target)
-            if self._stream_displayed >= target_len:
-                return  # Nothing new to reveal
+            changed = False
 
-            buffer_size = target_len - self._stream_displayed
-            # Adaptive speed: drain the buffer in ~150ms regardless of burst size
-            chars = max(1, (buffer_size * 16) // 150)
+            # Advance content buffer
+            content_text, content_changed = self._content_buffer.advance(16)
+            if content_changed:
+                self.content = content_text
+                self.standard_content = content_text
+                html_content = mistune.html(content_text)
+                enhanced_html = self.enhance_html_with_copy_buttons(html_content)
+                if self.bubble and hasattr(self.bubble, 'setHtml'):
+                    self.bubble.setHtml(enhanced_html)
+                changed = True
 
-            self._stream_displayed = min(self._stream_displayed + chars, target_len)
-            displayed_text = self._stream_target[:self._stream_displayed]
+            # Advance thinking buffer
+            thinking_text, thinking_changed = self._thinking_buffer.advance(16)
+            if thinking_changed:
+                self.thinking_content = thinking_text
+                if self.role == "assistant" and self.thinking_browser.isVisible():
+                    html_thinking = mistune.html(thinking_text)
+                    self.thinking_browser.setHtml(html_thinking)
+                changed = True
 
-            # Update content and render (skip LaTeX during streaming for performance)
-            self.content = displayed_text
-            self.standard_content = displayed_text
-            html_content = mistune.html(displayed_text)
-            enhanced_html = self.enhance_html_with_copy_buttons(html_content)
-
-            if not self.bubble or not hasattr(self.bubble, 'setHtml'):
-                return
-
-            self.bubble.setHtml(enhanced_html)
-            self.adjust_heights()
-            self.stream_updated.emit()
+            if changed:
+                self.adjust_heights()
+                self.stream_updated.emit()
         except RuntimeError:
             # Widget has been deleted, stop the timer
             if self._stream_timer:
@@ -585,13 +668,28 @@ class MessageWidget(QWidget):
             self._stream_timer.stop()
         self._is_streaming_response = False
 
-        # Show all remaining text with full rendering pipeline
-        if self._stream_target:
-            self.content = self._stream_target
-            self.standard_content = self._stream_target
+        # Flush content buffer
+        content_text = self._content_buffer.flush()
+        if content_text:
+            self.content = content_text
+            self.standard_content = content_text
+
+        # Flush thinking buffer and render with LaTeX
+        thinking_text = self._thinking_buffer.flush()
+        if thinking_text:
+            self.thinking_content = thinking_text
+            if self.role == "assistant":
+                from src.services.settings_manager import settings_manager
+                theme = settings_manager.get("theme", "dark")
+                html_thinking = mistune.html(thinking_text)
+                html_thinking = LaTeXProcessor.process_html(html_thinking, theme=theme)
+                if self.thinking_browser.isVisible():
+                    self.thinking_browser.setHtml(html_thinking)
+
+        # Full render content with LaTeX
         self.finalize_response()
-        self._stream_target = ""
-        self._stream_displayed = 0
+        self._content_buffer.reset()
+        self._thinking_buffer.reset()
 
     def finalize_response(self):
         """Process LaTeX in the final response after streaming is complete."""
