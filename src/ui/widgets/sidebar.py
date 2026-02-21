@@ -150,13 +150,6 @@ class Sidebar(QWidget):
         self.new_chat_requested.emit()
 
     def on_import_chat(self):
-        # Get main window to check generation state
-        main_window = self.window()
-        if hasattr(main_window, 'is_any_generation_active') and main_window.is_any_generation_active():
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Generation in Progress", "Cannot import chat while generating. Please wait...")
-            return
-
         from PySide6.QtWidgets import QFileDialog, QMessageBox
         file_path, _ = QFileDialog.getOpenFileName(self, "Import Chat", "", "JSON (*.json)")
         if file_path:
@@ -201,24 +194,26 @@ class Sidebar(QWidget):
     def handle_export(self, chat_id):
         import os
         from PySide6.QtWidgets import QFileDialog, QMessageBox
-        file_path, filter_selected = QFileDialog.getSaveFileName(self, "Export Chat", "", "Markdown (*.md);;JSON (*.json)")
+        file_path, _ = QFileDialog.getSaveFileName(self, "Export Chat", "", "Chat Export (*)")
         if file_path:
-            # Determine format based on selected filter or file extension
-            if filter_selected and "JSON" in filter_selected:
-                fmt = 'json'
-                # Ensure .json extension
-                if not file_path.endswith('.json'):
-                    file_path += '.json'
-            else:
-                fmt = 'markdown'
-                # Ensure .md extension
-                if not file_path.endswith('.md'):
-                    file_path += '.md'
+            # Strip any extension the user typed — we'll write both ourselves
+            base = file_path
+            for ext in ('.md', '.json'):
+                if base.endswith(ext):
+                    base = base[:-len(ext)]
+                    break
 
-            content = chat_manager.export_chat(chat_id, fmt)
-            with open(file_path, 'w') as f:
-                f.write(content)
-            QMessageBox.information(self, "Success", f"Chat exported successfully to {os.path.basename(file_path)}.")
+            md_path   = base + '.md'
+            json_path = base + '.json'
+
+            with open(md_path, 'w', encoding='utf-8') as f:
+                f.write(chat_manager.export_chat(chat_id, 'markdown'))
+            with open(json_path, 'w', encoding='utf-8') as f:
+                f.write(chat_manager.export_chat(chat_id, 'json'))
+
+            name = os.path.basename(base)
+            QMessageBox.information(self, "Success",
+                f"Chat exported as:\n  {name}.md\n  {name}.json")
 
     def handle_delete(self, chat_id, item):
         from PySide6.QtWidgets import QMessageBox

@@ -247,7 +247,12 @@ class MessageWidget(QWidget):
         self.standard_content = self.content
         self.thinking_initial = self.thinking_content  # Save initial for later
 
-        html_content = mistune.html(self.standard_content)
+        # For user messages, pre-process single newlines into Markdown hard line
+        # breaks so mistune renders both Markdown and line breaks correctly.
+        render_content = (self._preprocess_linebreaks(self.standard_content)
+                          if self.role == "user" else self.standard_content)
+
+        html_content = mistune.html(render_content)
         enhanced_html = self.enhance_html_with_copy_buttons(html_content)
 
         # Process LaTeX expressions
@@ -376,6 +381,16 @@ class MessageWidget(QWidget):
         except Exception as e:
             print(f"[MessageWidget] Error creating thumbnail: {e}")
             return None
+
+    def _preprocess_linebreaks(self, text):
+        """Convert single newlines to Markdown hard line breaks (two trailing spaces).
+
+        Paragraph breaks (double newlines) are left intact so mistune still
+        renders them as <p> separators.  Single newlines become '  \\n' which
+        mistune renders as <br>, giving us both Markdown and line-break support.
+        """
+        paragraphs = text.split('\n\n')
+        return '\n\n'.join(para.replace('\n', '  \n') for para in paragraphs)
 
     def apply_theme_styling(self):
         """Apply current theme colors to the message bubble."""

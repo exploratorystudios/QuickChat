@@ -37,6 +37,8 @@ class MainWindow(QMainWindow):
         self.stop_requested = False  # Flag to stop streaming
         self.generating_title = False  # Flag to prevent sending while title is being generated
         self.generating_response = False  # Flag to track if model is generating a response
+        self.streaming_chat_id = None  # Chat ID of the chat currently streaming
+        self.background_chat_widgets = None  # Widget snapshot when streaming chat is backgrounded
 
         # Set window class name for Linux WM matching
         self.setObjectName("QuickChat")
@@ -115,12 +117,19 @@ class MainWindow(QMainWindow):
         self.update_sidebar_buttons()
 
     def update_sidebar_buttons(self):
-        """Enable/disable sidebar buttons based on generation state."""
-        is_generating = self.is_any_generation_active()
-        self.sidebar.new_chat_btn.setEnabled(not is_generating)
-        self.sidebar.import_btn.setEnabled(not is_generating)
-        self.sidebar.chat_list.setEnabled(not is_generating)
-        self.header.refresh_btn.setEnabled(not is_generating)
+        """Enable/disable sidebar buttons based on generation state.
+
+        Only response generation (not title generation) locks down navigation.
+        Title generation is safe to run while switching chats, importing, or
+        creating new chats because it uses captured local variables and writes
+        results back via streaming_for_chat_id regardless of current_chat_id.
+        Sending new messages stays blocked during both via input_area.on_send.
+        """
+        streaming = self.generating_response
+        self.sidebar.new_chat_btn.setEnabled(not streaming)
+        self.sidebar.import_btn.setEnabled(True)  # Always — sidebar has no guard now
+        self.sidebar.chat_list.setEnabled(True)    # Always allow chat switching
+        self.header.refresh_btn.setEnabled(not streaming)
 
     def on_model_changed(self, model_name):
         """Handle model selection change signal."""
@@ -145,9 +154,9 @@ class MainWindow(QMainWindow):
 
     def create_new_chat(self):
         """Create a new chat and select it."""
-        # Prevent creating new chat while any generation is happening
-        if self.is_any_generation_active():
-            print("[MainWindow] Cannot create new chat while generating. Please wait...")
+        # Block only during active response streaming, not title generation
+        if self.generating_response:
+            print("[MainWindow] Cannot create new chat while streaming a response.")
             return
 
         # Use default model from settings
@@ -172,19 +181,39 @@ class MainWindow(QMainWindow):
             notification.show()
 
     def load_chat(self, chat_id):
-        """Load messages for a specific chat."""
-        # Prevent switching chats while any generation is happening
-        if self.is_any_generation_active():
-            print("[MainWindow] Cannot switch chats while generating. Please wait...")
+        """Load messages for a specific chat.
+
+        Chat switching is always allowed, even during streaming.  When switching
+        away from a streaming chat its widgets are detached (not destroyed) so
+        the background stream can keep writing to them.  Switching back restores
+        those widgets instantly without a DB reload.
+        """
+        if chat_id == self.current_chat_id:
             return
 
-        self.current_chat_id = chat_id
-        self.chat_area.clear()
+        # ── Switching BACK to the chat that's streaming in the background ──
+        if chat_id == self.streaming_chat_id and self.background_chat_widgets is not None:
+            self.chat_area.restore_widgets(self.background_chat_widgets)
+            self.background_chat_widgets = None
+            self.current_chat_id = chat_id
+            chat = chat_manager.get_chat(chat_id)
+            if chat and chat.model_name:
+                index = self.header.model_selector.findText(chat.model_name)
+                if index >= 0:
+                    self.header.model_selector.setCurrentIndex(index)
+            return
 
-        # Get the chat to retrieve the model used
+        # ── Switching AWAY from the chat that's currently streaming ──
+        # Detach its widgets instead of destroying them so the stream continues.
+        if self.streaming_chat_id is not None and self.current_chat_id == self.streaming_chat_id:
+            self.background_chat_widgets = self.chat_area.detach_widgets()
+        else:
+            self.chat_area.clear()
+
+        self.current_chat_id = chat_id
+
         chat = chat_manager.get_chat(chat_id)
         if chat and chat.model_name:
-            # Set the model selector to the chat's model
             index = self.header.model_selector.findText(chat.model_name)
             if index >= 0:
                 self.header.model_selector.setCurrentIndex(index)
@@ -192,7 +221,6 @@ class MainWindow(QMainWindow):
         messages = chat_manager.get_messages(chat_id)
         for msg in messages:
             thinking = msg.thinking or ""
-            # Parse images if present
             images = []
             if msg.images:
                 try:
@@ -201,7 +229,6 @@ class MainWindow(QMainWindow):
                     print(f"[MainWindow] Error parsing images: {e}")
             self.chat_area.add_message(msg.role, msg.content, thinking, msg.id, images)
 
-        # Scroll to bottom after all messages are loaded
         self.chat_area.scroll_to_bottom()
 
     def handle_chat_deleted(self, deleted_chat_id):
@@ -213,9 +240,9 @@ class MainWindow(QMainWindow):
 
     def handle_fork_chat(self, message_id):
         """Handle forking a chat from a specific message."""
-        # Prevent forking while any generation is happening
-        if self.is_any_generation_active():
-            print("[MainWindow] Cannot fork chat while generating. Please wait...")
+        # Block only during active response streaming, not title generation
+        if self.generating_response:
+            print("[MainWindow] Cannot fork chat while streaming a response.")
             return
 
         if not self.current_chat_id:
@@ -232,9 +259,14 @@ class MainWindow(QMainWindow):
         self.stop_requested = True
 
     def _on_stream_content_updated(self):
-        """Scroll to bottom when smooth streaming reveals new content."""
-        if not self.chat_area.user_scrolled_up:
-            self.chat_area.scroll_to_bottom()
+        """Scroll to bottom when smooth streaming reveals new content.
+
+        Only scrolls if the user is currently viewing the streaming chat —
+        not when the stream is running in the background.
+        """
+        if self.current_chat_id == self.streaming_chat_id:
+            if not self.chat_area.user_scrolled_up:
+                self.chat_area.scroll_to_bottom()
 
     @qasync.asyncSlot(str, str)
     async def handle_send_message(self, content, image_path=""):
@@ -246,6 +278,18 @@ class MainWindow(QMainWindow):
 
         if not self.current_chat_id:
             self.create_new_chat()
+
+        # Capture the chat this message belongs to.  The user may switch to
+        # another chat mid-stream, so self.current_chat_id can change; all DB
+        # writes after the stream must use this captured value instead.
+        streaming_for_chat_id = self.current_chat_id
+
+        # Discard any widget snapshot left over from a *completed* background
+        # stream (content already saved to DB; load_chat will reload if needed).
+        if self.background_chat_widgets is not None:
+            for w in self.background_chat_widgets:
+                w.deleteLater()
+            self.background_chat_widgets = None
 
         # Process image if provided
         images_json = None
@@ -300,6 +344,7 @@ class MainWindow(QMainWindow):
         self.input_area.set_generating(True)
         self.header.set_generating(True)
         self.stop_requested = False
+        self.streaming_chat_id = streaming_for_chat_id
 
         # Stream Response
         model = self.header.model_selector.currentText()
@@ -365,6 +410,7 @@ class MainWindow(QMainWindow):
             # Stop thinking animation when streaming is complete
             assistant_widget.stop_thinking_animation()
             # Reset UI from generating state
+            self.streaming_chat_id = None
             self.generating_response = False
             self.update_sidebar_buttons()
             self.input_area.set_generating(False)
@@ -372,21 +418,22 @@ class MainWindow(QMainWindow):
             # Refocus on input area for immediate typing
             self.input_area.text_input.setFocus()
 
-        # Save Assistant Message
-        assistant_msg = chat_manager.add_message(self.current_chat_id, "assistant", full_response, thinking=full_thinking)
+        # Save Assistant Message — use streaming_for_chat_id, not self.current_chat_id,
+        # because the user may have switched to a different chat during streaming.
+        assistant_msg = chat_manager.add_message(streaming_for_chat_id, "assistant", full_response, thinking=full_thinking)
         if assistant_msg:
             assistant_widget.message_id = assistant_msg.id
 
         # Update Chat Title if it's the first message - use AI to generate smart title
-        chat = chat_manager.get_chat(self.current_chat_id)
+        chat = chat_manager.get_chat(streaming_for_chat_id)
         if chat and chat.title == "New Chat":
             try:
                 # Count messages to ensure this is really the first exchange
-                message_count = len(chat_manager.get_messages(self.current_chat_id))
+                message_count = len(chat_manager.get_messages(streaming_for_chat_id))
                 if message_count <= 2:  # User message + assistant message
                     # Only generate title if we have a reasonable response
                     if full_response and len(full_response.strip()) > 10:
-                        print(f"Generating smart title for chat {self.current_chat_id}...")
+                        print(f"Generating smart title for chat {streaming_for_chat_id}...")
                         self.set_generating_title(True)
                         try:
                             new_title = ""
@@ -394,30 +441,36 @@ class MainWindow(QMainWindow):
                             async for title_chunk in ollama_service.generate_chat_title(content, full_response, model):
                                 new_title += title_chunk
 
+                            # Check if the chat still exists — user may have deleted it
+                            # or created a new chat while title was being generated.
+                            if not chat_manager.get_chat(streaming_for_chat_id):
+                                print(f"Chat {streaming_for_chat_id} no longer exists; skipping title update.")
+                                return
+
                             # Save the final title to database
                             if new_title and new_title.strip():
-                                chat_manager.update_chat_title(self.current_chat_id, new_title)
+                                chat_manager.update_chat_title(streaming_for_chat_id, new_title)
 
                             # Animate the title in the sidebar with smooth typing effect
-                            self.sidebar.update_chat_title(self.current_chat_id, new_title.strip() if new_title else "", animate=True)
+                            self.sidebar.update_chat_title(streaming_for_chat_id, new_title.strip() if new_title else "", animate=True)
 
                             if new_title and new_title.strip():
                                 print(f"Chat title updated to: {new_title}")
                             else:
                                 print("Generated title was empty, using fallback")
                                 fallback_title = content[:30] + "..." if len(content) > 30 else content
-                                chat_manager.update_chat_title(self.current_chat_id, fallback_title)
+                                chat_manager.update_chat_title(streaming_for_chat_id, fallback_title)
                                 self.sidebar.load_chats()
                         finally:
                             self.set_generating_title(False)
                     else:
                         # Response too short, use fallback title
                         fallback_title = content[:30] + "..." if len(content) > 30 else content
-                        chat_manager.update_chat_title(self.current_chat_id, fallback_title)
+                        chat_manager.update_chat_title(streaming_for_chat_id, fallback_title)
                         self.sidebar.load_chats()
             except Exception as e:
                 print(f"Error generating chat title: {e}")
                 self.set_generating_title(False)
                 fallback_title = content[:30] + "..." if len(content) > 30 else content
-                chat_manager.update_chat_title(self.current_chat_id, fallback_title)
+                chat_manager.update_chat_title(streaming_for_chat_id, fallback_title)
                 self.sidebar.load_chats()
