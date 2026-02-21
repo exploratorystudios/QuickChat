@@ -20,11 +20,23 @@ from src.services.ollama_client import ollama_service
 from config.theme import DARK_THEME
 import qasync
 
+# Ordered list of (label, token_count) presets. 0 = sentinel for "Custom".
+CONTEXT_PRESETS = [
+    ("2K  (2,048)",    2048),
+    ("4K  (4,096)",    4096),
+    ("8K  (8,192)",    8192),
+    ("16K (16,384)",  16384),
+    ("32K (32,768)",  32768),
+    ("64K (65,536)",  65536),
+    ("128K (131,072)", 131072),
+    ("Custom...",      0),
+]
+
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setFixedSize(400, 350)
+        self.setFixedSize(420, 460)
         self.setup_ui()
         # Load models asynchronously
         asyncio.create_task(self.load_models_async())
@@ -32,46 +44,73 @@ class SettingsDialog(QDialog):
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
-        
+
         form_layout = QFormLayout()
-        
+
         # Theme
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(["dark", "light"])
         form_layout.addRow("Theme:", self.theme_combo)
-        
+
         # Default Model (populated from detected models)
         self.model_input = QComboBox()
         self.model_input.setEditable(False)  # Read-only dropdown
         self.model_input.addItem("Loading models...")  # Placeholder
+        self.model_input.currentTextChanged.connect(self._on_model_changed)
         form_layout.addRow("Default Model:", self.model_input)
-        
+
         # Font Size
         self.font_size_spin = QSpinBox()
         self.font_size_spin.setRange(8, 32)
         form_layout.addRow("Font Size:", self.font_size_spin)
-        
+
         # Enter to Send
         self.enter_send_check = QCheckBox()
         form_layout.addRow("Enter to Send:", self.enter_send_check)
-        
+
+        # ── Context Size ──────────────────────────────────────────────────────
+        ctx_row = QHBoxLayout()
+        ctx_row.setSpacing(6)
+
+        self.ctx_preset_combo = QComboBox()
+        for label, _ in CONTEXT_PRESETS:
+            self.ctx_preset_combo.addItem(label)
+        self.ctx_preset_combo.currentTextChanged.connect(self._on_ctx_preset_changed)
+        ctx_row.addWidget(self.ctx_preset_combo, 1)
+
+        self.ctx_custom_spin = QSpinBox()
+        self.ctx_custom_spin.setRange(512, 2_097_152)
+        self.ctx_custom_spin.setSingleStep(512)
+        self.ctx_custom_spin.setValue(8192)
+        self.ctx_custom_spin.setSuffix(" tokens")
+        self.ctx_custom_spin.hide()
+        ctx_row.addWidget(self.ctx_custom_spin, 1)
+
+        form_layout.addRow("Context Size:", ctx_row)
+
+        # Model max label (shown below context row)
+        self.ctx_max_label = QLabel("Model max: —")
+        self.ctx_max_label.setStyleSheet("color: #888888; font-size: 11px;")
+        form_layout.addRow("", self.ctx_max_label)
+        # ─────────────────────────────────────────────────────────────────────
+
         layout.addLayout(form_layout)
-        
+
         layout.addStretch()
-        
+
         # Buttons
         btn_layout = QHBoxLayout()
         self.save_btn = QPushButton("Save")
         self.save_btn.setObjectName("PrimaryButton")
         self.save_btn.clicked.connect(self.save_settings)
-        
+
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.reject)
-        
+
         btn_layout.addWidget(self.save_btn)
         btn_layout.addWidget(self.cancel_btn)
         layout.addLayout(btn_layout)
-        
+
         # Styling
         self.setStyleSheet(f"""
             QDialog {{
@@ -85,6 +124,8 @@ class SettingsDialog(QDialog):
                 color: {DARK_THEME['text_primary']};
             }}
         """)
+
+    # ── Model loading ─────────────────────────────────────────────────────────
 
     async def load_models_async(self):
         """Load available models from Ollama asynchronously."""
@@ -104,6 +145,8 @@ class SettingsDialog(QDialog):
                 else:
                     # If saved model not found, use first available
                     self.model_input.setCurrentIndex(0)
+                # Trigger max-context fetch for the selected model
+                self._on_model_changed(self.model_input.currentText())
             else:
                 self.model_input.addItem("No models found")
         except Exception as e:
@@ -111,15 +154,80 @@ class SettingsDialog(QDialog):
             self.model_input.clear()
             self.model_input.addItem("Error loading models")
 
+    # ── Context controls ──────────────────────────────────────────────────────
+
+    def _on_ctx_preset_changed(self, text):
+        """Show custom spinbox only when 'Custom...' is selected."""
+        is_custom = text == "Custom..."
+        self.ctx_custom_spin.setVisible(is_custom)
+
+    def _on_model_changed(self, model_name):
+        """Update the model-max label when the model dropdown changes."""
+        if not model_name or model_name in ("Loading models...", "No models found", "Error loading models"):
+            self.ctx_max_label.setText("Model max: —")
+            return
+
+        max_ctx = ollama_service.get_model_max_context(model_name)
+        if max_ctx:
+            self.ctx_max_label.setText(f"Model max: {max_ctx:,} tokens")
+        else:
+            self.ctx_max_label.setText("Model max: detecting…")
+            asyncio.create_task(self._fetch_model_max(model_name))
+
+    async def _fetch_model_max(self, model_name):
+        """Fetch capabilities (and thus max_context) for a model async."""
+        try:
+            caps = await ollama_service.get_model_capabilities(model_name)
+            max_ctx = caps.get('max_context')
+            if max_ctx:
+                self.ctx_max_label.setText(f"Model max: {max_ctx:,} tokens")
+            else:
+                self.ctx_max_label.setText("Model max: unknown")
+        except Exception:
+            self.ctx_max_label.setText("Model max: unknown")
+
+    def _get_selected_context(self):
+        """Return the numeric context size from the current UI state."""
+        text = self.ctx_preset_combo.currentText()
+        if text == "Custom...":
+            return self.ctx_custom_spin.value()
+        for label, value in CONTEXT_PRESETS:
+            if label == text:
+                return value
+        return 8192  # Fallback
+
+    # ── Settings load / save ──────────────────────────────────────────────────
+
     def load_settings(self):
         self.theme_combo.setCurrentText(settings_manager.get("theme", "dark"))
         # Default model will be set by load_models_async
         self.font_size_spin.setValue(settings_manager.get("font_size", 14))
         self.enter_send_check.setChecked(settings_manager.get("enter_to_send", True))
 
+        saved_ctx = settings_manager.get("context_size", 8192)
+        # Match saved value to a preset label
+        matched = False
+        for label, value in CONTEXT_PRESETS:
+            if label == "Custom...":
+                continue
+            if value == saved_ctx:
+                idx = self.ctx_preset_combo.findText(label)
+                if idx >= 0:
+                    self.ctx_preset_combo.setCurrentIndex(idx)
+                matched = True
+                break
+        if not matched:
+            # Select "Custom..." and set spinbox value
+            idx = self.ctx_preset_combo.findText("Custom...")
+            if idx >= 0:
+                self.ctx_preset_combo.setCurrentIndex(idx)
+            self.ctx_custom_spin.setValue(saved_ctx)
+            self.ctx_custom_spin.show()
+
     def save_settings(self):
         settings_manager.set("theme", self.theme_combo.currentText())
         settings_manager.set("default_model", self.model_input.currentText())
         settings_manager.set("font_size", self.font_size_spin.value())
         settings_manager.set("enter_to_send", self.enter_send_check.isChecked())
+        settings_manager.set("context_size", self._get_selected_context())
         self.accept()

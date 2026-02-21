@@ -175,6 +175,17 @@ def get_stylesheet(theme_mode="dark"):
         background-color: {colors['background']};
         border-bottom: 1px solid {colors['border']};
     }}
+
+    /* Context Bar */
+    QWidget#ContextBar {{
+        background-color: {colors['background']};
+        border-bottom: 1px solid {colors['border']};
+    }}
+
+    QLabel#ContextBarLabel {{
+        color: {colors['text_secondary']};
+        font-size: 8px;
+    }}
     
     QComboBox {{
         background-color: {colors['surface']};

@@ -22,7 +22,8 @@ DEFAULT_SETTINGS = {
     "theme": "dark",
     "default_model": "llama3",
     "font_size": 14,
-    "enter_to_send": True
+    "enter_to_send": True,
+    "context_size": 8192
 }
 
 class SettingsManager:

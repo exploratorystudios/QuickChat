@@ -14,6 +14,7 @@
 
 from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QMessageBox
 from PySide6.QtGui import QIcon
+import asyncio
 import qasync
 import os
 import json
@@ -21,6 +22,7 @@ from config.settings import WINDOW_TITLE, WINDOW_SIZE
 from config.theme import get_stylesheet
 from src.ui.widgets.sidebar import Sidebar
 from src.ui.widgets.chat_area import ChatArea
+from src.ui.widgets.context_bar import ContextBar
 from src.ui.widgets.input_area import InputArea
 from src.ui.widgets.header import Header
 from src.ui.dialogs.model_change_notification import ModelChangeNotification
@@ -31,7 +33,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("QuickChat")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1200, 828)
         self.current_chat_id = None
         self.streaming_task = None  # Track the current streaming task
         self.stop_requested = False  # Flag to stop streaming
@@ -39,6 +41,8 @@ class MainWindow(QMainWindow):
         self.generating_response = False  # Flag to track if model is generating a response
         self.streaming_chat_id = None  # Chat ID of the chat currently streaming
         self.background_chat_widgets = None  # Widget snapshot when streaming chat is backgrounded
+        self._title_gen_task = None           # asyncio.Task for background title generation
+        self._title_gen_for_chat_id = None    # Which chat the active title task belongs to
 
         # Set window class name for Linux WM matching
         self.setObjectName("QuickChat")
@@ -83,13 +87,15 @@ class MainWindow(QMainWindow):
         self.header.settings_requested.connect(self.apply_settings)
         self.header.model_changed.connect(self.on_model_changed)
         self.header.sidebar_toggle_requested.connect(self.toggle_sidebar)
+        self.context_bar = ContextBar()
         self.chat_area = ChatArea()
         self.chat_area.fork_requested.connect(self.handle_fork_chat)
         self.input_area = InputArea()
         self.input_area.send_message.connect(self.handle_send_message)
         self.input_area.stop_requested.connect(self.handle_stop_requested)
-        
+
         right_layout.addWidget(self.header)
+        right_layout.addWidget(self.context_bar)
         right_layout.addWidget(self.chat_area, stretch=1)
         right_layout.addWidget(self.input_area, stretch=0)
         
@@ -104,6 +110,27 @@ class MainWindow(QMainWindow):
         self.input_area.set_vision_supported(supports_vision)
         print(f"[MainWindow] Updated thinking button state: {supports_thinking}")
         print(f"[MainWindow] Updated vision button state: {supports_vision}")
+        # Model max context is now cached — refresh the bar
+        self.update_context_bar()
+
+    def update_context_bar(self):
+        """Recompute estimated token usage and refresh the context bar display."""
+        from src.services.settings_manager import settings_manager
+        ctx_size = settings_manager.get("context_size", 8192)
+        model = self.header.model_selector.currentText()
+        model_max = ollama_service.get_model_max_context(model)
+
+        if self.current_chat_id is None:
+            self.context_bar.clear()
+            return
+
+        messages = chat_manager.get_messages(self.current_chat_id)
+        # Rough estimate: 4 chars ≈ 1 token, plus ~4 tokens per message for role/formatting
+        total_chars = sum(len(msg.content or '') + len(msg.thinking or '') for msg in messages)
+        overhead = len(messages) * 4
+        used_tokens = max(0, total_chars // 4 + overhead)
+
+        self.context_bar.update_display(used_tokens, ctx_size, model_max)
 
     def is_any_generation_active(self):
         """Check if any generation is happening (response or title)."""
@@ -151,6 +178,8 @@ class MainWindow(QMainWindow):
         # Reload chat to refresh message colors
         if self.current_chat_id:
             self.load_chat(self.current_chat_id)
+        # Context size may have changed — refresh the bar regardless
+        self.update_context_bar()
 
     def create_new_chat(self):
         """Create a new chat and select it."""
@@ -201,6 +230,7 @@ class MainWindow(QMainWindow):
                 index = self.header.model_selector.findText(chat.model_name)
                 if index >= 0:
                     self.header.model_selector.setCurrentIndex(index)
+            self.update_context_bar()
             return
 
         # ── Switching AWAY from the chat that's currently streaming ──
@@ -230,6 +260,7 @@ class MainWindow(QMainWindow):
             self.chat_area.add_message(msg.role, msg.content, thinking, msg.id, images)
 
         self.chat_area.scroll_to_bottom()
+        self.update_context_bar()
 
     def handle_chat_deleted(self, deleted_chat_id):
         """Handle when a chat is deleted."""
@@ -237,6 +268,26 @@ class MainWindow(QMainWindow):
         if self.current_chat_id == deleted_chat_id:
             self.chat_area.clear()
             self.current_chat_id = None
+            self.context_bar.clear()
+
+        # If response streaming is running for this chat, stop it.
+        # This covers both the foreground case and the background-stream case
+        # (where the user switched away but the stream kept going).
+        if self.streaming_chat_id == deleted_chat_id and self.generating_response:
+            self.stop_requested = True
+            # Discard any detached background widgets for this chat
+            if self.background_chat_widgets is not None:
+                for w in self.background_chat_widgets:
+                    w.deleteLater()
+                self.background_chat_widgets = None
+
+        # If title generation is running for this chat, cancel it immediately.
+        # This aborts the Ollama read and unlocks the UI without waiting for the
+        # request to finish.
+        if (self._title_gen_for_chat_id == deleted_chat_id
+                and self._title_gen_task is not None
+                and not self._title_gen_task.done()):
+            self._title_gen_task.cancel()
 
     def handle_fork_chat(self, message_id):
         """Handle forking a chat from a specific message."""
@@ -267,6 +318,47 @@ class MainWindow(QMainWindow):
         if self.current_chat_id == self.streaming_chat_id:
             if not self.chat_area.user_scrolled_up:
                 self.chat_area.scroll_to_bottom()
+
+    async def _run_title_generation(self, streaming_for_chat_id, content, full_response, model):
+        """Background asyncio.Task that generates and saves a chat title.
+
+        Runs as a Task so it can be cancelled instantly (via _title_gen_task.cancel())
+        when the originating chat is deleted, without waiting for Ollama to finish.
+        """
+        try:
+            new_title = ""
+            async for title_chunk in ollama_service.generate_chat_title(content, full_response, model):
+                new_title += title_chunk
+
+            # Chat may have been deleted while we were generating — check before saving.
+            if not chat_manager.get_chat(streaming_for_chat_id):
+                print(f"[TitleGen] Chat {streaming_for_chat_id} gone; discarding title.")
+            else:
+                if new_title and new_title.strip():
+                    chat_manager.update_chat_title(streaming_for_chat_id, new_title)
+                    self.sidebar.update_chat_title(streaming_for_chat_id, new_title.strip(), animate=True)
+                    print(f"[TitleGen] Title updated: {new_title}")
+                else:
+                    print("[TitleGen] Empty title; using fallback.")
+                    fallback = content[:30] + "..." if len(content) > 30 else content
+                    chat_manager.update_chat_title(streaming_for_chat_id, fallback)
+                    self.sidebar.load_chats()
+
+        except asyncio.CancelledError:
+            # Chat was deleted — abort silently. finally still runs.
+            print(f"[TitleGen] Cancelled for chat {streaming_for_chat_id}.")
+
+        except Exception as e:
+            print(f"[TitleGen] Error: {e}")
+            fallback = content[:30] + "..." if len(content) > 30 else content
+            if chat_manager.get_chat(streaming_for_chat_id):
+                chat_manager.update_chat_title(streaming_for_chat_id, fallback)
+                self.sidebar.load_chats()
+
+        finally:
+            self.set_generating_title(False)
+            self._title_gen_task = None
+            self._title_gen_for_chat_id = None
 
     @qasync.asyncSlot(str, str)
     async def handle_send_message(self, content, image_path=""):
@@ -318,6 +410,7 @@ class MainWindow(QMainWindow):
 
         # Save User Message
         user_msg = chat_manager.add_message(self.current_chat_id, "user", content, images=images_json)
+        self.update_context_bar()
 
         # Parse images for display
         display_images = []
@@ -373,7 +466,15 @@ class MainWindow(QMainWindow):
                 dest_path = os.path.join(DATA_DIR, "images", unique_filename)
                 image_to_send = dest_path
 
-            stream = ollama_service.chat_stream(model, messages_payload, enable_thinking=enable_thinking, images=image_to_send)
+            # Determine effective context size, clamped to the model's max
+            from src.services.settings_manager import settings_manager as _sm
+            ctx_size = _sm.get("context_size", 8192)
+            model_max = ollama_service.get_model_max_context(model)
+            if model_max and ctx_size > model_max:
+                print(f"[MainWindow] context_size {ctx_size} exceeds model max {model_max}; clamping.")
+                ctx_size = model_max
+
+            stream = ollama_service.chat_stream(model, messages_payload, enable_thinking=enable_thinking, images=image_to_send, num_ctx=ctx_size)
 
             async for chunk in stream:
                 # Check if stop was requested
@@ -423,54 +524,22 @@ class MainWindow(QMainWindow):
         assistant_msg = chat_manager.add_message(streaming_for_chat_id, "assistant", full_response, thinking=full_thinking)
         if assistant_msg:
             assistant_widget.message_id = assistant_msg.id
+        self.update_context_bar()
 
         # Update Chat Title if it's the first message - use AI to generate smart title
         chat = chat_manager.get_chat(streaming_for_chat_id)
         if chat and chat.title == "New Chat":
-            try:
-                # Count messages to ensure this is really the first exchange
-                message_count = len(chat_manager.get_messages(streaming_for_chat_id))
-                if message_count <= 2:  # User message + assistant message
-                    # Only generate title if we have a reasonable response
-                    if full_response and len(full_response.strip()) > 10:
-                        print(f"Generating smart title for chat {streaming_for_chat_id}...")
-                        self.set_generating_title(True)
-                        try:
-                            new_title = ""
-                            # Buffer the title generation (collect all chunks)
-                            async for title_chunk in ollama_service.generate_chat_title(content, full_response, model):
-                                new_title += title_chunk
-
-                            # Check if the chat still exists — user may have deleted it
-                            # or created a new chat while title was being generated.
-                            if not chat_manager.get_chat(streaming_for_chat_id):
-                                print(f"Chat {streaming_for_chat_id} no longer exists; skipping title update.")
-                                return
-
-                            # Save the final title to database
-                            if new_title and new_title.strip():
-                                chat_manager.update_chat_title(streaming_for_chat_id, new_title)
-
-                            # Animate the title in the sidebar with smooth typing effect
-                            self.sidebar.update_chat_title(streaming_for_chat_id, new_title.strip() if new_title else "", animate=True)
-
-                            if new_title and new_title.strip():
-                                print(f"Chat title updated to: {new_title}")
-                            else:
-                                print("Generated title was empty, using fallback")
-                                fallback_title = content[:30] + "..." if len(content) > 30 else content
-                                chat_manager.update_chat_title(streaming_for_chat_id, fallback_title)
-                                self.sidebar.load_chats()
-                        finally:
-                            self.set_generating_title(False)
-                    else:
-                        # Response too short, use fallback title
-                        fallback_title = content[:30] + "..." if len(content) > 30 else content
-                        chat_manager.update_chat_title(streaming_for_chat_id, fallback_title)
-                        self.sidebar.load_chats()
-            except Exception as e:
-                print(f"Error generating chat title: {e}")
-                self.set_generating_title(False)
-                fallback_title = content[:30] + "..." if len(content) > 30 else content
-                chat_manager.update_chat_title(streaming_for_chat_id, fallback_title)
-                self.sidebar.load_chats()
+            message_count = len(chat_manager.get_messages(streaming_for_chat_id))
+            if message_count <= 2:  # User message + assistant message
+                if full_response and len(full_response.strip()) > 10:
+                    print(f"Generating smart title for chat {streaming_for_chat_id}...")
+                    self.set_generating_title(True)
+                    self._title_gen_for_chat_id = streaming_for_chat_id
+                    self._title_gen_task = asyncio.create_task(
+                        self._run_title_generation(streaming_for_chat_id, content, full_response, model)
+                    )
+                else:
+                    # Response too short — use a simple fallback immediately
+                    fallback_title = content[:30] + "..." if len(content) > 30 else content
+                    chat_manager.update_chat_title(streaming_for_chat_id, fallback_title)
+                    self.sidebar.load_chats()

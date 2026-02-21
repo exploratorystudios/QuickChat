@@ -73,7 +73,8 @@ class OllamaClient:
                     thinking_method = 'parameter'
                     print(f"[Capabilities] Thinking is parameter-based (has API support)")
 
-            # Also check modelinfo for vision (contains vision-related params)
+            # Also check modelinfo for vision and max context window
+            max_context = None
             if hasattr(details, 'modelinfo') and details.modelinfo:
                 modelinfo = details.modelinfo
                 # Check for vision-related parameters
@@ -81,6 +82,15 @@ class OllamaClient:
                 if has_vision_params:
                     vision_capable = True
                     print(f"[Capabilities] Found vision parameters in modelinfo")
+                # Extract max context length from modelinfo (e.g. llama.context_length)
+                for key, val in modelinfo.items():
+                    if 'context_length' in str(key).lower():
+                        try:
+                            max_context = int(val)
+                            print(f"[Capabilities] Found max context: {max_context} (key={key})")
+                        except (ValueError, TypeError):
+                            pass
+                        break
 
             # If thinking wasn't detected via API, check keywords for directive-based thinking
             if not thinking_capable:
@@ -93,12 +103,13 @@ class OllamaClient:
             result = {
                 'thinking': thinking_capable,
                 'vision': vision_capable,
-                'thinking_method': thinking_method
+                'thinking_method': thinking_method,
+                'max_context': max_context,
             }
 
             # Cache the result
             OllamaClient._capabilities_cache[model_name] = result
-            print(f"[Capabilities] {model_name} - thinking: {thinking_capable}, vision: {vision_capable}")
+            print(f"[Capabilities] {model_name} - thinking: {thinking_capable}, vision: {vision_capable}, max_context: {max_context}")
             return result
 
         except Exception as e:
@@ -114,7 +125,8 @@ class OllamaClient:
             result = {
                 'thinking': thinking_capable,
                 'vision': vision_capable,
-                'thinking_method': thinking_method
+                'thinking_method': thinking_method,
+                'max_context': None,  # Cannot determine from keywords alone
             }
             OllamaClient._capabilities_cache[model_name] = result
             print(f"[Capabilities] {model_name} (fallback) - thinking: {thinking_capable}, vision: {vision_capable}")
@@ -154,6 +166,21 @@ class OllamaClient:
             return cls._capabilities_cache[model_name].get('vision', False)
         return False
 
+    @classmethod
+    def get_model_max_context(cls, model_name):
+        """
+        Return the maximum context window (num_ctx) for a model, or None if unknown.
+        Only available after get_model_capabilities() has been called for this model.
+
+        Args:
+            model_name (str): The model name to check.
+
+        Returns:
+            int or None: Max context tokens, or None if not yet fetched.
+        """
+        if model_name in cls._capabilities_cache:
+            return cls._capabilities_cache[model_name].get('max_context')
+        return None
 
     async def list_models(self):
         """Fetch available models from Ollama."""
@@ -181,7 +208,7 @@ class OllamaClient:
             print(f"Error listing models: {e}")
             return []
 
-    async def chat_stream(self, model, messages, enable_thinking=True, images=None):
+    async def chat_stream(self, model, messages, enable_thinking=True, images=None, num_ctx=None):
         """
         Stream chat response from Ollama with thinking and image support.
         Intelligently handles both parameter-based thinking (think=True/False) and
@@ -192,6 +219,7 @@ class OllamaClient:
             messages (list): List of message dicts [{'role': 'user', 'content': '...'}, ...].
             enable_thinking (bool): Whether to enable thinking mode (default: True).
             images (str or list): Image file path(s) or base64 strings to include in the first message.
+            num_ctx (int or None): Context window size. None lets the model use its default.
 
         Yields:
             dict: {'thinking': str, 'content': str} Chunks of thinking and response content.
@@ -235,6 +263,11 @@ class OllamaClient:
                 'messages': messages,
                 'stream': True,
             }
+
+            # Apply context window size if specified
+            if num_ctx is not None:
+                chat_kwargs['options'] = {'num_ctx': num_ctx}
+                print(f"[ChatStream] Using num_ctx={num_ctx} for {model}")
 
             # Only add think parameter if model supports it (parameter-based thinking)
             if thinking_method == 'parameter':
