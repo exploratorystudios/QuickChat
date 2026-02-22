@@ -198,6 +198,8 @@ class ChatArea(QWidget):
         self.scroll_bottom_btn.move(x, self.height() - margin - btn_size)
         self.scroll_top_btn.move(x, self.height() - margin - btn_size * 2 - gap)
 
+    # ── Scroll range / button visibility ──────────────────────────────────
+
     def _on_scroll_range_changed(self, _min, _max):
         """Update buttons when the scrollable range changes (content added/removed)."""
         scrollbar = self.scroll_area.verticalScrollBar()

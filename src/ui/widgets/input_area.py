@@ -121,6 +121,22 @@ class InputArea(QWidget):
 
         main_layout.addLayout(buttons_preview_row)
 
+        # Tok/s floating overlay — parented to self so it doesn't affect any layout
+        self.toks_label = QLabel("", self)
+        self.toks_label.setObjectName("ToksLabel")
+        self.toks_label.setStyleSheet("""
+            QLabel#ToksLabel {
+                background-color: rgba(59, 130, 246, 40);
+                color: rgba(147, 197, 253, 230);
+                border: 1px solid rgba(59, 130, 246, 120);
+                border-radius: 6px;
+                padding: 1px 8px;
+                font-size: 14px;
+                font-weight: 500;
+            }
+        """)
+        self.toks_label.hide()
+
         # Text Input and Send Button row
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
@@ -520,6 +536,33 @@ class InputArea(QWidget):
 
         # Show preview widget
         self.image_preview_widget.setVisible(True)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_toks_label()
+
+    def _position_toks_label(self):
+        """Keep the tok/s label pinned to the top-right corner of the buttons row."""
+        self.toks_label.adjustSize()
+        right_margin = 20  # matches contentsMargins right
+        top_margin = 10    # matches contentsMargins top
+        btn_h = 35
+        lh = self.toks_label.height()
+        x = self.width() - right_margin - self.toks_label.width()
+        y = top_margin + (btn_h - lh) // 2
+        self.toks_label.move(x, y)
+
+    def show_toks(self, tps: float) -> None:
+        """Display a live tokens-per-second rate in the top-right of the input area."""
+        self.toks_label.setText(f"{tps:.1f} tok/s")
+        self._position_toks_label()
+        if not self.toks_label.isVisible():
+            self.toks_label.show()
+            self.toks_label.raise_()
+
+    def hide_toks(self) -> None:
+        """Hide the tok/s label."""
+        self.toks_label.hide()
 
     def remove_image(self):
         """Remove the attached image."""

@@ -18,6 +18,7 @@ import asyncio
 import qasync
 import os
 import json
+import time
 from config.settings import WINDOW_TITLE, WINDOW_SIZE
 from config.theme import get_stylesheet
 from src.ui.widgets.sidebar import Sidebar
@@ -430,6 +431,8 @@ class MainWindow(QMainWindow):
         full_response = ""
         full_thinking = ""
         has_scrolled_for_response = False
+        _toks_start: float | None = None   # time of first content token
+        _toks_chars: int = 0               # total content chars received
 
         # Set UI to generating state
         self.generating_response = True
@@ -493,6 +496,15 @@ class MainWindow(QMainWindow):
                     full_response += content_chunk
                     assistant_widget.stream_token(full_response)
                     # Scrolling handled by stream_updated signal
+
+                    # Tok/s tracking — start timer on the first content token to
+                    # measure decode speed only (excludes prefill / first-token latency)
+                    if _toks_start is None:
+                        _toks_start = time.monotonic()
+                    _toks_chars += len(content_chunk)
+                    elapsed = time.monotonic() - _toks_start
+                    if elapsed >= 0.75:  # wait for a stable sample before showing
+                        self.input_area.show_toks((_toks_chars / 4.0) / elapsed)
         except RuntimeError as e:
             # Suppress expected httpcore GeneratorExit errors when stopping
             if "async generator ignored GeneratorExit" not in str(e):
@@ -510,6 +522,8 @@ class MainWindow(QMainWindow):
             assistant_widget.finish_streaming()
             # Stop thinking animation when streaming is complete
             assistant_widget.stop_thinking_animation()
+            # Hide tok/s overlay
+            self.input_area.hide_toks()
             # Reset UI from generating state
             self.streaming_chat_id = None
             self.generating_response = False
