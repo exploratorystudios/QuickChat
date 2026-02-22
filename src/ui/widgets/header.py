@@ -175,9 +175,10 @@ class Header(QWidget):
         # The emoji will appear to spin smoothly
 
     def set_generating(self, is_generating):
-        """Disable model selector during message generation to prevent async conflicts."""
+        """Disable model selector and settings during message generation to prevent async conflicts."""
         self.is_generating = is_generating
         self.model_selector.setEnabled(not is_generating)
+        self.settings_btn.setEnabled(not is_generating)
 
     def on_toggle_sidebar(self):
         """Emit signal to toggle sidebar."""

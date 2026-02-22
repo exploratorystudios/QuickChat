@@ -124,13 +124,14 @@ class InputArea(QWidget):
         # Tok/s floating overlay — parented to self so it doesn't affect any layout
         self.toks_label = QLabel("", self)
         self.toks_label.setObjectName("ToksLabel")
+        self.toks_label.setFixedSize(105, 28)
+        self.toks_label.setAlignment(Qt.AlignCenter)
         self.toks_label.setStyleSheet("""
             QLabel#ToksLabel {
                 background-color: rgba(59, 130, 246, 40);
                 color: rgba(147, 197, 253, 230);
                 border: 1px solid rgba(59, 130, 246, 120);
                 border-radius: 6px;
-                padding: 1px 8px;
                 font-size: 14px;
                 font-weight: 500;
             }
@@ -543,13 +544,11 @@ class InputArea(QWidget):
 
     def _position_toks_label(self):
         """Keep the tok/s label pinned to the top-right corner of the buttons row."""
-        self.toks_label.adjustSize()
         right_margin = 20  # matches contentsMargins right
         top_margin = 10    # matches contentsMargins top
         btn_h = 35
-        lh = self.toks_label.height()
         x = self.width() - right_margin - self.toks_label.width()
-        y = top_margin + (btn_h - lh) // 2
+        y = top_margin + (btn_h - self.toks_label.height()) // 2
         self.toks_label.move(x, y)
 
     def show_toks(self, tps: float) -> None:

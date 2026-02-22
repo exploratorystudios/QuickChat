@@ -49,8 +49,12 @@ class _StreamBuffer:
             self._last_token_time = now
         self.target = full_text
 
-    def advance(self, tick_ms=16):
-        """Advance reveal position. Returns (displayed_text, changed)."""
+    def advance(self, tick_ms=16, allow_catchup=True):
+        """Advance reveal position. Returns (displayed_text, changed).
+
+        allow_catchup: when False (drain phase after stream ends), the large-buffer
+        acceleration is disabled so remaining text flows out smoothly.
+        """
         target_len = len(self.target)
         if self.displayed >= target_len:
             return self.target[:self.displayed], False
@@ -64,13 +68,13 @@ class _StreamBuffer:
             chars = int(self.fractional)
             if chars > 0:
                 self.fractional -= chars
-            elif buffer_size > 200:
+            elif buffer_size > 200 and allow_catchup:
                 chars = buffer_size // 5
                 self.fractional = 0.0
             else:
                 return self.target[:self.displayed], False
-            # Safety: if buffer is very large, accelerate to catch up
-            if buffer_size > 200:
+            # Safety: if buffer is very large, accelerate to catch up (live streaming only)
+            if buffer_size > 200 and allow_catchup:
                 chars = max(chars, buffer_size // 5)
         else:
             # No rate info yet, use conservative fallback
@@ -181,6 +185,7 @@ class MessageWidget(QWidget):
         self._thinking_buffer = _StreamBuffer()
         self._stream_timer = None
         self._is_streaming_response = False
+        self._finishing = False  # True while draining buffer after stream ends
 
         self.setup_ui()
 
@@ -624,6 +629,7 @@ class MessageWidget(QWidget):
         self._content_buffer.reset()
         self._thinking_buffer.reset()
         self._is_streaming_response = True
+        self._finishing = False
         if not self._stream_timer:
             self._stream_timer = QTimer()
             self._stream_timer.setTimerType(Qt.PreciseTimer)
@@ -632,7 +638,25 @@ class MessageWidget(QWidget):
 
     def stream_token(self, full_text):
         """Update the target content text for smooth reveal during streaming."""
+        # First content token: instantly complete any pending thinking reveal so
+        # we never have two smooth streams running at the same time.
+        if not self._content_buffer.target:
+            self._flush_thinking_now()
         self._content_buffer.push(full_text)
+
+    def _flush_thinking_now(self):
+        """Immediately reveal all buffered thinking text (called when content begins)."""
+        if self._thinking_buffer.displayed >= len(self._thinking_buffer.target):
+            return  # Already fully displayed
+        thinking_text = self._thinking_buffer.flush()
+        self.thinking_content = thinking_text
+        if self.role == "assistant" and thinking_text and self.thinking_browser.isVisible():
+            from src.services.settings_manager import settings_manager
+            theme = settings_manager.get("theme", "dark")
+            html_thinking = mistune.html(thinking_text)
+            html_thinking = LaTeXProcessor.process_html(html_thinking, theme=theme)
+            self.thinking_browser.setHtml(html_thinking)
+            self.adjust_heights()
 
     def stream_thinking(self, full_thinking):
         """Update the target thinking text for smooth reveal during streaming."""
@@ -649,8 +673,12 @@ class MessageWidget(QWidget):
         try:
             changed = False
 
+            # During the drain phase (stream ended, buffer not yet empty) disable
+            # the large-buffer catch-up acceleration so the text flows out smoothly.
+            allow_catchup = not self._finishing
+
             # Advance content buffer
-            content_text, content_changed = self._content_buffer.advance(16)
+            content_text, content_changed = self._content_buffer.advance(16, allow_catchup)
             if content_changed:
                 self.content = content_text
                 self.standard_content = content_text
@@ -672,24 +700,22 @@ class MessageWidget(QWidget):
             if changed:
                 self.adjust_heights()
                 self.stream_updated.emit()
+
+            # Once the stream has ended and the buffer is fully displayed, finalize.
+            if self._finishing and self._content_buffer.displayed >= len(self._content_buffer.target):
+                self._do_finalize()
+
         except RuntimeError:
             # Widget has been deleted, stop the timer
             if self._stream_timer:
                 self._stream_timer.stop()
 
     def finish_streaming(self):
-        """Stop the smooth reveal timer and do a full render with LaTeX."""
-        if self._stream_timer:
-            self._stream_timer.stop()
+        """Signal that no more tokens are coming; drain the buffer smoothly then finalize."""
         self._is_streaming_response = False
 
-        # Flush content buffer
-        content_text = self._content_buffer.flush()
-        if content_text:
-            self.content = content_text
-            self.standard_content = content_text
-
-        # Flush thinking buffer and render with LaTeX
+        # Thinking is always complete by now (flushed when content began), but
+        # guard the edge case where content never arrived at all.
         thinking_text = self._thinking_buffer.flush()
         if thinking_text:
             self.thinking_content = thinking_text
@@ -701,7 +727,22 @@ class MessageWidget(QWidget):
                 if self.thinking_browser.isVisible():
                     self.thinking_browser.setHtml(html_thinking)
 
-        # Full render content with LaTeX
+        # If the buffer is already empty, finalize immediately; otherwise let the
+        # timer keep ticking so the remaining text streams out naturally.
+        if self._content_buffer.displayed >= len(self._content_buffer.target):
+            self._do_finalize()
+        else:
+            self._finishing = True
+
+    def _do_finalize(self):
+        """Stop the stream timer and perform the final LaTeX render."""
+        self._finishing = False
+        if self._stream_timer:
+            self._stream_timer.stop()
+        content_text = self._content_buffer.flush()
+        if content_text:
+            self.content = content_text
+            self.standard_content = content_text
         self.finalize_response()
         self._content_buffer.reset()
         self._thinking_buffer.reset()
