@@ -184,7 +184,7 @@ def get_stylesheet(theme_mode="dark"):
 
     QLabel#ContextBarLabel {{
         color: {colors['text_secondary']};
-        font-size: 8px;
+        font-size: 10px;
     }}
     
     QComboBox {{
