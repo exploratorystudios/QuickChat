@@ -16,7 +16,83 @@ import ollama
 import re
 import json
 import os
+import platform
+import subprocess
 from config.settings import OLLAMA_HOST, DEFAULT_MODEL, DATA_DIR
+
+
+# ---------------------------------------------------------------------------
+# Physical core detection
+# ---------------------------------------------------------------------------
+
+_NUM_THREADS: int | None = None  # lazily populated on first use
+
+
+def _detect_physical_cores() -> int:
+    """Return the number of physical CPU cores (hyperthreads excluded).
+
+    Tries OS-specific methods first; falls back to half of logical count.
+    Supported on Linux, Windows, and macOS.
+    """
+    system = platform.system()
+    try:
+        if system == 'Linux':
+            # Parse /proc/cpuinfo — count unique (physical id, core id) pairs.
+            # Single-socket systems without 'physical id' still expose 'core id'.
+            physical = set()
+            phys_id = core_id = None
+            with open('/proc/cpuinfo') as f:
+                for line in f:
+                    if line.startswith('physical id'):
+                        phys_id = line.split(':', 1)[1].strip()
+                    elif line.startswith('core id'):
+                        core_id = line.split(':', 1)[1].strip()
+                    elif not line.strip():
+                        if core_id is not None:
+                            physical.add((phys_id or '0', core_id))
+                        phys_id = core_id = None
+            if physical:
+                return len(physical)
+
+        elif system == 'Windows':
+            # wmic still works on Win 10/11; /format:value gives clean key=value output
+            result = subprocess.run(
+                ['wmic', 'cpu', 'get', 'NumberOfCores', '/format:value'],
+                capture_output=True, text=True, timeout=5,
+            )
+            total = sum(
+                int(line.split('=', 1)[1])
+                for line in result.stdout.splitlines()
+                if line.lower().startswith('numberofcores=')
+                and line.split('=', 1)[1].strip().isdigit()
+            )
+            if total > 0:
+                return total
+
+        elif system == 'Darwin':
+            result = subprocess.run(
+                ['sysctl', '-n', 'hw.physicalcpu'],
+                capture_output=True, text=True, timeout=5,
+            )
+            val = result.stdout.strip()
+            if val.isdigit():
+                return int(val)
+
+    except Exception:
+        pass
+
+    # Fallback: assume half of logical CPUs are physical cores
+    return max(1, (os.cpu_count() or 2) // 2)
+
+
+def _get_num_threads() -> int:
+    """Return physical core count, detecting it once and caching the result."""
+    global _NUM_THREADS
+    if _NUM_THREADS is None:
+        _NUM_THREADS = _detect_physical_cores()
+        print(f"[OllamaClient] Detected {_NUM_THREADS} physical CPU core(s) — "
+              f"setting num_thread={_NUM_THREADS} for Ollama")
+    return _NUM_THREADS
 
 class OllamaClient:
     # In-memory cache for model capabilities detected during this session
@@ -264,10 +340,19 @@ class OllamaClient:
                 'stream': True,
             }
 
-            # Apply context window size if specified
+            # Apply options — always set num_thread; add num_ctx when specified
+            from src.services.settings_manager import settings_manager as _sm
+            options: dict = {
+                'num_thread': _get_num_threads(),
+                'num_gpu':    _sm.get('num_gpu', -1),
+                'num_batch':  _sm.get('num_batch', 512),
+                'f16_kv':     _sm.get('f16_kv', True),
+                'use_mlock':  _sm.get('use_mlock', False),
+            }
             if num_ctx is not None:
-                chat_kwargs['options'] = {'num_ctx': num_ctx}
+                options['num_ctx'] = num_ctx
                 print(f"[ChatStream] Using num_ctx={num_ctx} for {model}")
+            chat_kwargs['options'] = options
 
             # Only add think parameter if model supports it (parameter-based thinking)
             if thinking_method == 'parameter':
@@ -415,6 +500,7 @@ Title:"""
                 'model': model,
                 'messages': messages,
                 'stream': True,
+                'options': {'num_thread': _get_num_threads()},
             }
             # Only add think parameter if model supports parameter-based thinking
             if thinking_method == 'parameter' and supports_thinking:

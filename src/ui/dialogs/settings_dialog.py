@@ -14,7 +14,8 @@
 
 import asyncio
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-                               QComboBox, QSpinBox, QCheckBox, QPushButton, QFormLayout)
+                               QComboBox, QSpinBox, QCheckBox, QPushButton,
+                               QFormLayout, QFrame)
 from src.services.settings_manager import settings_manager
 from src.services.ollama_client import ollama_service
 from config.theme import DARK_THEME
@@ -32,11 +33,13 @@ CONTEXT_PRESETS = [
     ("Custom...",      0),
 ]
 
+BATCH_SIZES = [128, 256, 512, 1024, 2048]
+
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setFixedSize(420, 460)
+        self.setFixedSize(420, 600)
         self.setup_ui()
         # Load models asynchronously
         asyncio.create_task(self.load_models_async())
@@ -95,6 +98,63 @@ class SettingsDialog(QDialog):
         # ─────────────────────────────────────────────────────────────────────
 
         layout.addLayout(form_layout)
+
+        # ── Performance section ───────────────────────────────────────────────
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet(f"color: {DARK_THEME['border']};")
+        layout.addWidget(separator)
+
+        perf_header = QLabel("Performance")
+        perf_header.setStyleSheet(
+            f"color: {DARK_THEME['text_secondary']}; font-size: 11px; font-weight: 600;"
+            " padding: 2px 0px;"
+        )
+        layout.addWidget(perf_header)
+
+        perf_layout = QFormLayout()
+        perf_layout.setSpacing(8)
+
+        # GPU Layers
+        self.gpu_layers_spin = QSpinBox()
+        self.gpu_layers_spin.setRange(-1, 999)
+        self.gpu_layers_spin.setSpecialValueText("Auto")   # shown when value == -1
+        self.gpu_layers_spin.setToolTip(
+            "Number of model layers to offload to GPU.\n"
+            "Auto = offload everything that fits in VRAM.\n"
+            "0 = CPU only.  N = offload exactly N layers."
+        )
+        perf_layout.addRow("GPU Layers:", self.gpu_layers_spin)
+
+        # Batch Size
+        self.batch_combo = QComboBox()
+        for v in BATCH_SIZES:
+            self.batch_combo.addItem(str(v), v)
+        self.batch_combo.setToolTip(
+            "Prompt batch size — larger values process the context faster\n"
+            "but use more memory. 512 is a safe default."
+        )
+        perf_layout.addRow("Batch Size:", self.batch_combo)
+
+        # FP16 KV Cache
+        self.f16_kv_check = QCheckBox()
+        self.f16_kv_check.setToolTip(
+            "Store the KV cache in fp16 instead of fp32.\n"
+            "Halves KV cache memory and is faster on most hardware."
+        )
+        perf_layout.addRow("FP16 KV Cache:", self.f16_kv_check)
+
+        # Lock model in RAM
+        self.mlock_check = QCheckBox()
+        self.mlock_check.setToolTip(
+            "Lock model weights in RAM so the OS cannot swap them out.\n"
+            "Eliminates stutter on RAM-adequate systems.\n"
+            "Leave off if you are low on memory."
+        )
+        perf_layout.addRow("Lock Model in RAM:", self.mlock_check)
+
+        layout.addLayout(perf_layout)
+        # ─────────────────────────────────────────────────────────────────────
 
         layout.addStretch()
 
@@ -224,10 +284,24 @@ class SettingsDialog(QDialog):
             self.ctx_custom_spin.setValue(saved_ctx)
             self.ctx_custom_spin.show()
 
+        # Performance
+        self.gpu_layers_spin.setValue(settings_manager.get("num_gpu", -1))
+        saved_batch = settings_manager.get("num_batch", 512)
+        idx = self.batch_combo.findData(saved_batch)
+        if idx >= 0:
+            self.batch_combo.setCurrentIndex(idx)
+        self.f16_kv_check.setChecked(settings_manager.get("f16_kv", True))
+        self.mlock_check.setChecked(settings_manager.get("use_mlock", False))
+
     def save_settings(self):
         settings_manager.set("theme", self.theme_combo.currentText())
         settings_manager.set("default_model", self.model_input.currentText())
         settings_manager.set("font_size", self.font_size_spin.value())
         settings_manager.set("enter_to_send", self.enter_send_check.isChecked())
         settings_manager.set("context_size", self._get_selected_context())
+        # Performance
+        settings_manager.set("num_gpu", self.gpu_layers_spin.value())
+        settings_manager.set("num_batch", self.batch_combo.currentData())
+        settings_manager.set("f16_kv", self.f16_kv_check.isChecked())
+        settings_manager.set("use_mlock", self.mlock_check.isChecked())
         self.accept()

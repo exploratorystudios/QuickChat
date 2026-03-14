@@ -26,17 +26,17 @@ LIGHT_THEME = {
     "primary_dark": "#006BCE",
     "accent": "#F59E0B",
     "background": "#FFFFFF",
-    "surface": "#F0F2F5",
-    "surface_light": "#E4E6EB",
-    "chat_background": "#F8F9FA", # Light gray for chat area
+    "surface": "#EBEDF0",
+    "surface_light": "#D8DADF",
+    "chat_background": "#F0F2F5", # Slightly gray so bubbles pop
     "text_primary": "#050505",
     "text_secondary": "#65676B",
     "border": "#CED0D4",
     "success": "#31A24C",
     "error": "#FA383E",
     "bubble_user": "#0084FF",
-    "bubble_assistant": "#E4E6EB",  # Light gray for assistant messages
-    "bubble_assistant_text": "#050505",  # Dark text for light bubbles
+    "bubble_assistant": "#C5C8CE",  # Clearly distinct gray bubble
+    "bubble_assistant_text": "#050505",
     "text_on_primary": "#FFFFFF",
     "input_bg": "#F0F2F5",
     "input_text": "#050505"
@@ -59,7 +59,7 @@ def get_stylesheet(theme_mode="dark"):
     
     /* Sidebar */
     QWidget#Sidebar {{
-        background-color: {colors['background']};
+        background-color: {colors['surface']};
         border-right: 1px solid {colors['border']};
         min-width: 280px;
     }}
@@ -184,7 +184,7 @@ def get_stylesheet(theme_mode="dark"):
 
     QLabel#ContextBarLabel {{
         color: {colors['text_secondary']};
-        font-size: 10px;
+        font-size: 12px;
     }}
     
     QComboBox {{

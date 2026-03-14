@@ -34,7 +34,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("QuickChat")
-        self.setMinimumSize(1200, 828)
+        self.setMinimumSize(1200, 848)
         self.current_chat_id = None
         self.streaming_task = None  # Track the current streaming task
         self.stop_requested = False  # Flag to stop streaming
@@ -176,9 +176,12 @@ class MainWindow(QMainWindow):
         from src.services.settings_manager import settings_manager
         theme_mode = settings_manager.get("theme", "dark")
         self.setStyleSheet(get_stylesheet(theme_mode))
-        # Reload chat to refresh message colors
+        # Force-reload current chat to repaint message bubbles with new theme colors.
+        # Must null current_chat_id first to bypass the early-return guard in load_chat.
         if self.current_chat_id:
-            self.load_chat(self.current_chat_id)
+            chat_id = self.current_chat_id
+            self.current_chat_id = None
+            self.load_chat(chat_id)
         # Context size may have changed — refresh the bar regardless
         self.update_context_bar()
 
@@ -413,6 +416,9 @@ class MainWindow(QMainWindow):
         user_msg = chat_manager.add_message(self.current_chat_id, "user", content, images=images_json)
         self.update_context_bar()
 
+        # Move chat to top of unpinned section now that it has a new message
+        self.sidebar.bump_chat_to_top(streaming_for_chat_id)
+
         # Parse images for display
         display_images = []
         if images_json:
@@ -433,6 +439,8 @@ class MainWindow(QMainWindow):
         has_scrolled_for_response = False
         _toks_start: float | None = None   # time of first content token
         _toks_chars: int = 0               # total content chars received
+        _think_toks_start: float | None = None  # time of first thinking token
+        _think_toks_chars: int = 0              # total thinking chars received
 
         # Set UI to generating state
         self.generating_response = True
@@ -490,6 +498,14 @@ class MainWindow(QMainWindow):
                     full_thinking += thinking_chunk
                     assistant_widget.stream_thinking(full_thinking)
                     # Scrolling handled by stream_updated signal
+
+                    # Tok/s tracking for thinking phase
+                    if _think_toks_start is None:
+                        _think_toks_start = time.monotonic()
+                    _think_toks_chars += len(thinking_chunk)
+                    elapsed = time.monotonic() - _think_toks_start
+                    if elapsed >= 0.75:
+                        self.input_area.show_toks((_think_toks_chars / 4.0) / elapsed)
 
                 content_chunk = chunk.get('content', '')
                 if content_chunk:

@@ -38,11 +38,31 @@ class ChatManager:
             session.close()
 
     def get_all_chats(self):
-        """Retrieve all chats ordered by updated_at desc."""
+        """Retrieve all chats: pinned first, then unpinned, both by updated_at desc."""
         session = db.get_session()
         try:
-            chats = session.query(Chat).order_by(Chat.updated_at.desc()).all()
+            chats = session.query(Chat).order_by(
+                Chat.is_pinned.desc(),
+                Chat.updated_at.desc()
+            ).all()
             return chats
+        finally:
+            session.close()
+
+    def set_chat_pinned(self, chat_id, pinned: bool):
+        """Pin or unpin a chat."""
+        session = db.get_session()
+        try:
+            chat = session.query(Chat).filter(Chat.id == chat_id).first()
+            if chat:
+                chat.is_pinned = pinned
+                session.commit()
+                return True
+            return False
+        except Exception as e:
+            session.rollback()
+            print(f"Error setting chat pinned: {e}")
+            return False
         finally:
             session.close()
 

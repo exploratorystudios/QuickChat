@@ -26,7 +26,7 @@ class ContextBar(QWidget):
     def __init__(self):
         super().__init__()
         self.setObjectName("ContextBar")
-        self.setFixedHeight(28)
+        self.setFixedHeight(32)
         self._setup_ui()
 
     def _setup_ui(self):

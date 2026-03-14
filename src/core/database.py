@@ -42,6 +42,14 @@ class DatabaseManager:
                 conn.execute(text("ALTER TABLE messages ADD COLUMN images TEXT"))
                 conn.commit()
 
+            # Migrate chats table
+            result = conn.execute(text("PRAGMA table_info(chats)"))
+            chat_columns = [row[1] for row in result]
+
+            if 'is_pinned' not in chat_columns:
+                conn.execute(text("ALTER TABLE chats ADD COLUMN is_pinned BOOLEAN DEFAULT 0"))
+                conn.commit()
+
         # Create images directory if it doesn't exist
         from config.settings import DATA_DIR
         import os

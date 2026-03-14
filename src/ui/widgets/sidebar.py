@@ -13,10 +13,64 @@
 # limitations under the License.
 
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-                               QLineEdit, QListWidget, QListWidgetItem, QLabel, QGraphicsOpacityEffect)
+                               QLineEdit, QListWidget, QListWidgetItem, QLabel,
+                               QGraphicsOpacityEffect, QStyledItemDelegate, QStyle)
 from PySide6.QtCore import Signal, Qt, QSize, QTimer, QPropertyAnimation, QEasingCurve, QParallelAnimationGroup, QAbstractAnimation
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QColor, QBrush, QFont, QPainter
 from src.services.chat_manager import chat_manager
+
+
+class ChatItemDelegate(QStyledItemDelegate):
+    """Custom delegate that paints chat list items, bypassing stylesheet overrides."""
+
+    def paint(self, painter, option, index):
+        from src.services.settings_manager import settings_manager
+        from config.theme import DARK_THEME, LIGHT_THEME
+        colors = DARK_THEME if settings_manager.get("theme", "dark") == "dark" else LIGHT_THEME
+
+        is_pinned  = bool(index.data(Qt.UserRole + 1))
+        is_selected = bool(option.state & QStyle.State_Selected)
+        is_hovered  = bool(option.state & QStyle.State_MouseOver)
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # ── Background ────────────────────────────────────────────────────────
+        rect = option.rect.adjusted(2, 2, -2, -2)
+        if is_selected:
+            bg = QColor(colors['surface_light'])
+        elif is_hovered and is_pinned:
+            # Slightly brighter tint on hover for pinned
+            bg = QColor(59, 130, 246, 70)
+        elif is_hovered:
+            bg = QColor(colors['surface'])
+        elif is_pinned:
+            bg = QColor(59, 130, 246, 45)
+        else:
+            bg = QColor(0, 0, 0, 0)
+
+        painter.setBrush(bg)
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(rect, 8, 8)
+
+        # ── Text ──────────────────────────────────────────────────────────────
+        text = index.data(Qt.DisplayRole) or ""
+        text_color = QColor(147, 197, 253, 230) if is_pinned else QColor(colors['text_primary'])
+        painter.setPen(text_color)
+
+        font = painter.font()
+        font.setBold(is_pinned)
+        painter.setFont(font)
+
+        text_rect = option.rect.adjusted(12, 0, -12, 0)
+        elided = painter.fontMetrics().elidedText(text, Qt.ElideRight, text_rect.width())
+        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, elided)
+
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        hint = super().sizeHint(option, index)
+        return QSize(hint.width(), 38)
 
 class Sidebar(QWidget):
     chat_selected = Signal(int) # Emits chat_id
@@ -38,10 +92,10 @@ class Sidebar(QWidget):
         self._element_effects = {}  # {element: QGraphicsOpacityEffect}
         self._animation_pool = []  # Keep all animations alive
 
-        # Typing animation tracking
+        # Typing animation tracking (keyed by chat_id, not item reference)
         self.typing_timer = QTimer()
         self.typing_timer.timeout.connect(self._on_typing_tick)
-        self.typing_queue = {}  # {chat_id: {'full_text': str, 'displayed': int, 'item': QListWidgetItem}}
+        self.typing_queue = {}  # {chat_id: {'full_text': str, 'displayed': int}}
         self.typing_speed = 25  # milliseconds per character (40 chars/sec)
 
         self.setup_ui()
@@ -73,6 +127,7 @@ class Sidebar(QWidget):
 
         # Chat List
         self.chat_list = QListWidget()
+        self.chat_list.setItemDelegate(ChatItemDelegate(self.chat_list))
         self.chat_list.itemClicked.connect(self.on_chat_clicked)
         layout.addWidget(self.chat_list)
 
@@ -80,41 +135,86 @@ class Sidebar(QWidget):
         self.setMinimumWidth(self.min_width)
         self.setMaximumWidth(self.min_width)
 
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    # _style_item is intentionally absent — ChatItemDelegate reads UserRole+1
+    # and handles all visual styling (background, text color, bold) directly.
+
+    def _pinned_count(self):
+        """Count pinned items currently at the top of the list."""
+        count = 0
+        for i in range(self.chat_list.count()):
+            item = self.chat_list.item(i)
+            if item.data(Qt.UserRole + 1):  # is_pinned stored in UserRole+1
+                count += 1
+            else:
+                break
+        return count
+
+    def _is_item_pinned(self, item):
+        return bool(item.data(Qt.UserRole + 1))
+
+    # ── Chat list management ──────────────────────────────────────────────────
 
     def load_chats(self):
         self.chat_list.clear()
         chats = chat_manager.get_all_chats()
         for chat in chats:
-            item = QListWidgetItem(chat.title)
-            item.setData(Qt.UserRole, chat.id)
-            self.chat_list.addItem(item)
+            self._append_item(chat)
+
+    def _append_item(self, chat):
+        """Append a chat item to the end of the list."""
+        is_pinned = getattr(chat, 'is_pinned', False) or False
+        item = QListWidgetItem(chat.title)
+        item.setData(Qt.UserRole, chat.id)
+        item.setData(Qt.UserRole + 1, is_pinned)
+        self.chat_list.addItem(item)
+        return item
+
+    def add_chat_to_list(self, chat):
+        """Add a single chat to the top of the unpinned section."""
+        is_pinned = getattr(chat, 'is_pinned', False) or False
+        item = QListWidgetItem(chat.title)
+        item.setData(Qt.UserRole, chat.id)
+        item.setData(Qt.UserRole + 1, is_pinned)
+        pinned_count = self._pinned_count()
+        self.chat_list.insertItem(pinned_count, item)
+        self.chat_list.setCurrentItem(item)
+        return item
+
+    def bump_chat_to_top(self, chat_id):
+        """Move a chat to the top of the unpinned section when it gets a new message."""
+        for i in range(self.chat_list.count()):
+            item = self.chat_list.item(i)
+            if item.data(Qt.UserRole) == chat_id:
+                # Don't move pinned chats
+                if self._is_item_pinned(item):
+                    return
+                # Already at the top of unpinned
+                if i == self._pinned_count():
+                    return
+                was_selected = (self.chat_list.currentItem() == item)
+                self.chat_list.takeItem(i)
+                pinned_count = self._pinned_count()
+                self.chat_list.insertItem(pinned_count, item)
+                if was_selected:
+                    self.chat_list.setCurrentItem(item)
+                return
 
     def update_chat_title(self, chat_id, new_title, animate=True):
-        """
-        Update the title of a specific chat in the list.
-
-        Args:
-            chat_id: The ID of the chat to update
-            new_title: The new title text
-            animate: If True, use smooth typing animation. If False, update immediately.
-        """
+        """Update the title of a specific chat in the list."""
         for i in range(self.chat_list.count()):
             item = self.chat_list.item(i)
             if item.data(Qt.UserRole) == chat_id:
                 if animate and new_title:
-                    # Queue this chat for typing animation
                     self.typing_queue[chat_id] = {
                         'full_text': new_title,
                         'displayed': 0,
-                        'item': item
                     }
-                    # Start the animation timer if not already running
                     if not self.typing_timer.isActive():
                         self.typing_timer.start(self.typing_speed)
                 else:
-                    # Immediate update
                     item.setText(new_title)
-                    # Remove from typing queue if present
                     if chat_id in self.typing_queue:
                         del self.typing_queue[chat_id]
                 break
@@ -126,25 +226,27 @@ class Sidebar(QWidget):
         for chat_id, animation_data in self.typing_queue.items():
             full_text = animation_data['full_text']
             displayed = animation_data['displayed']
-            item = animation_data['item']
 
-            # Advance by 1 character
             if displayed < len(full_text):
                 displayed += 1
                 animation_data['displayed'] = displayed
-                # Update item with partial text
-                item.setText(full_text[:displayed])
+                partial = full_text[:displayed]
+                # Look up item by chat_id each tick (item may have moved)
+                for i in range(self.chat_list.count()):
+                    item = self.chat_list.item(i)
+                    if item.data(Qt.UserRole) == chat_id:
+                        item.setText(partial)
+                        break
             else:
-                # Animation complete
                 completed_chats.append(chat_id)
 
-        # Remove completed animations from queue
         for chat_id in completed_chats:
             del self.typing_queue[chat_id]
 
-        # Stop timer if no more animations
         if not self.typing_queue:
             self.typing_timer.stop()
+
+    # ── Slot / event handlers ─────────────────────────────────────────────────
 
     def on_new_chat(self):
         self.new_chat_requested.emit()
@@ -166,37 +268,59 @@ class Sidebar(QWidget):
         self.chat_selected.emit(chat_id)
 
     def contextMenuEvent(self, event):
-        # Map the position to the chat_list widget's coordinate system
         list_pos = self.chat_list.mapFromGlobal(event.globalPos())
         item = self.chat_list.itemAt(list_pos)
-        
+
         if item:
             from PySide6.QtWidgets import QMenu, QInputDialog
             menu = QMenu(self)
             rename_action = menu.addAction("Rename Chat")
+
+            is_pinned = self._is_item_pinned(item)
+            pin_action = menu.addAction("Unpin Chat" if is_pinned else "Pin Chat")
+
             export_action = menu.addAction("Export Chat")
             delete_action = menu.addAction("Delete Chat")
-            
+
             action = menu.exec(event.globalPos())
-            
-            if action:  # Check if an action was selected
+
+            if action:
                 chat_id = item.data(Qt.UserRole)
                 if action == rename_action:
                     new_title, ok = QInputDialog.getText(self, "Rename Chat", "New Title:", text=item.text())
                     if ok and new_title:
                         if chat_manager.rename_chat(chat_id, new_title):
                             item.setText(new_title)
+                elif action == pin_action:
+                    self._toggle_pin(item, chat_id, not is_pinned)
                 elif action == export_action:
                     self.handle_export(chat_id)
                 elif action == delete_action:
                     self.handle_delete(chat_id, item)
+
+    def _toggle_pin(self, item, chat_id, new_is_pinned):
+        """Pin or unpin a chat and re-sort the list."""
+        chat_manager.set_chat_pinned(chat_id, new_is_pinned)
+
+        # Remember selection
+        current_item = self.chat_list.currentItem()
+        current_chat_id = current_item.data(Qt.UserRole) if current_item else None
+
+        self.load_chats()
+
+        # Restore selection
+        if current_chat_id is not None:
+            for i in range(self.chat_list.count()):
+                item = self.chat_list.item(i)
+                if item.data(Qt.UserRole) == current_chat_id:
+                    self.chat_list.setCurrentItem(item)
+                    break
 
     def handle_export(self, chat_id):
         import os
         from PySide6.QtWidgets import QFileDialog, QMessageBox
         file_path, _ = QFileDialog.getSaveFileName(self, "Export Chat", "", "Chat Export (*)")
         if file_path:
-            # Strip any extension the user typed — we'll write both ourselves
             base = file_path
             for ext in ('.md', '.json'):
                 if base.endswith(ext):
@@ -223,78 +347,52 @@ class Sidebar(QWidget):
             if chat_manager.delete_chat(chat_id):
                 self.chat_list.takeItem(self.chat_list.row(item))
                 self.chat_list.clearSelection()
-                # Emit signal to notify main window to clear chat area
                 self.chat_deleted.emit(chat_id)
-
-    def add_chat_to_list(self, chat):
-        """Add a single chat to the top of the list."""
-        item = QListWidgetItem(chat.title)
-        item.setData(Qt.UserRole, chat.id)
-        self.chat_list.insertItem(0, item)
-        self.chat_list.setCurrentItem(item)
 
     def filter_chats(self, text):
         for i in range(self.chat_list.count()):
             item = self.chat_list.item(i)
             item.setHidden(text.lower() not in item.text().lower())
 
+    # ── Collapse / expand animation ───────────────────────────────────────────
 
     def toggle_collapse(self):
-        """Toggle sidebar collapse/expand state with smooth animation."""
         if self.is_collapsed:
             self.expand()
         else:
             self.collapse()
 
     def collapse(self):
-        """Collapse the sidebar with smooth animation."""
         if self.is_collapsed:
             return
-
         self.is_collapsed = True
-
-        # Fade out elements while animating width
         self._animate_fade_out()
         self._animate_width(self.min_width, self.collapsed_width)
-
         self.collapse_state_changed.emit(True)
 
     def expand(self):
-        """Expand the sidebar with smooth animation."""
         if not self.is_collapsed:
             return
-
         self.is_collapsed = False
-
-        # Prevent widgets from being visible during width animation
-        # Set max size to 0 so layout doesn't render them
         elements = [self.new_chat_btn, self.import_btn, self.search_input, self.chat_list]
         for element in elements:
             element.setMaximumHeight(0)
-
-        # Animate width first
         self._animate_width(self.collapsed_width, self.min_width)
-
-        # Start fade in after width animation completes
         self._start_fade_in_timer()
-
         self.collapse_state_changed.emit(False)
 
     def _animate_width(self, start_width, end_width):
-        """Animate sidebar width smoothly using geometry."""
         if self.animation_group:
             self.animation_group.stop()
 
         self.animation_group = QParallelAnimationGroup()
 
-        # Animate minimum width
         min_width_anim = QPropertyAnimation(self, b"minimumWidth")
         min_width_anim.setDuration(300)
         min_width_anim.setStartValue(start_width)
         min_width_anim.setEndValue(end_width)
         min_width_anim.setEasingCurve(QEasingCurve.InOutCubic)
 
-        # Animate maximum width
         max_width_anim = QPropertyAnimation(self, b"maximumWidth")
         max_width_anim.setDuration(300)
         max_width_anim.setStartValue(start_width)
@@ -306,78 +404,56 @@ class Sidebar(QWidget):
         self.animation_group.start()
 
     def _animate_fade_out(self):
-        """Fade out UI elements smoothly."""
         elements = [self.new_chat_btn, self.import_btn, self.search_input, self.chat_list]
 
-        # Stop any existing fade animation ONLY if it's running
         if self.fade_animation_group and self.fade_animation_group.state() == QAbstractAnimation.Running:
             self.fade_animation_group.stop()
 
-        # Create new animation group
         self.fade_animation_group = QParallelAnimationGroup()
 
         for element in elements:
-            # Create fresh effect for this fade out
             effect = QGraphicsOpacityEffect()
             element.setGraphicsEffect(effect)
             effect.setOpacity(1.0)
-
-            # Store in pool to keep alive
             self._element_effects[element] = effect
 
             fade_anim = QPropertyAnimation(effect, b"opacity")
-            fade_anim.setDuration(300)  # Match width animation duration for synchronized fade
+            fade_anim.setDuration(300)
             fade_anim.setStartValue(1.0)
             fade_anim.setEndValue(0.0)
             fade_anim.setEasingCurve(QEasingCurve.InOutQuad)
-
             self.fade_animation_group.addAnimation(fade_anim)
 
-        # Keep animation group alive to prevent garbage collection of effects
         self._animation_pool.append(self.fade_animation_group)
-        # Cleanup old animation groups to prevent memory leak (keep last 10)
         if len(self._animation_pool) > 10:
             self._animation_pool.pop(0)
 
         self.fade_animation_group.start()
 
     def _hide_fade_elements(self):
-        """Hide elements after fade out completes."""
-        # Elements are now invisible (opacity 0) but still exist
-        # No need to hide or disable - they're invisible and won't respond to clicks
         pass
 
     def _start_fade_in_timer(self):
-        """Start fade in after width animation completes (300ms)."""
-        # Use a timer to start fade in when width animation finishes
         fade_start_timer = QTimer()
         fade_start_timer.setSingleShot(True)
         fade_start_timer.timeout.connect(self._animate_fade_in)
-        fade_start_timer.start(300)  # Match width animation duration
-        # Store timer reference to prevent garbage collection
+        fade_start_timer.start(300)
         self._fade_timer = fade_start_timer
 
     def _animate_fade_in(self):
-        """Fade in UI elements smoothly."""
         elements = [self.new_chat_btn, self.import_btn, self.search_input, self.chat_list]
 
-        # Stop any existing fade animation ONLY if it's running
         if self.fade_animation_group and self.fade_animation_group.state() == QAbstractAnimation.Running:
             self.fade_animation_group.stop()
 
         self.fade_animation_group = QParallelAnimationGroup()
 
-        # FIRST: Set up all effects and properties BEFORE showing or starting animation
         for element in elements:
-            # Restore max height that was set to 0 during expand
-            element.setMaximumHeight(16777215)  # Qt's default max height
+            element.setMaximumHeight(16777215)
 
-            # Create fresh effect for this fade in
             effect = QGraphicsOpacityEffect()
             element.setGraphicsEffect(effect)
-            effect.setOpacity(0.0)  # Start invisible
-
-            # Store in pool to keep alive
+            effect.setOpacity(0.0)
             self._element_effects[element] = effect
 
             fade_anim = QPropertyAnimation(effect, b"opacity")
@@ -385,18 +461,13 @@ class Sidebar(QWidget):
             fade_anim.setStartValue(0.0)
             fade_anim.setEndValue(1.0)
             fade_anim.setEasingCurve(QEasingCurve.InOutQuad)
-
             self.fade_animation_group.addAnimation(fade_anim)
 
-        # ONLY NOW show the widgets (after effects are applied and opacity set to 0)
         for element in elements:
             element.show()
 
-        # Keep animation group alive to prevent garbage collection of effects
         self._animation_pool.append(self.fade_animation_group)
-        # Cleanup old animation groups to prevent memory leak (keep last 10)
         if len(self._animation_pool) > 10:
             self._animation_pool.pop(0)
 
-        # THEN: Start the animation
         self.fade_animation_group.start()

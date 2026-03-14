@@ -23,7 +23,12 @@ DEFAULT_SETTINGS = {
     "default_model": "llama3",
     "font_size": 14,
     "enter_to_send": True,
-    "context_size": 8192
+    "context_size": 8192,
+    # Performance
+    "num_gpu": -1,      # -1 = offload all layers to GPU; 0 = CPU only
+    "num_batch": 512,   # prompt batch size
+    "f16_kv": True,     # fp16 KV cache (faster, less memory)
+    "use_mlock": False, # lock model weights in RAM (prevents swapping)
 }
 
 class SettingsManager:

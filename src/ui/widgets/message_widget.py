@@ -156,6 +156,13 @@ class CodeCopyTextBrowser(QTextBrowser):
             # Let parent handle other cases
             super().setSource(url)
 
+    def focusOutEvent(self, event):
+        """Clear text selection when focus leaves this widget."""
+        cursor = self.textCursor()
+        cursor.clearSelection()
+        self.setTextCursor(cursor)
+        super().focusOutEvent(event)
+
     def contextMenuEvent(self, event):
         """Override context menu to show custom message options instead of text selection."""
         # Pass the context menu event to the parent MessageWidget
@@ -410,10 +417,15 @@ class MessageWidget(QWidget):
             bg_color = colors['bubble_user']
             text_color = colors['text_on_primary']
             border_radius = "20px 20px 20px 20px"  # Fully rounded
+            # White selection on blue background so highlighted text is visible
+            selection_bg = "rgba(255, 255, 255, 210)"
+            selection_fg = "#004499"
         else:
             bg_color = colors['bubble_assistant']
             text_color = colors.get('bubble_assistant_text', colors['text_primary'])
             border_radius = "20px 20px 20px 20px"  # Fully rounded
+            selection_bg = colors['primary']   # #0084FF blue
+            selection_fg = "#ffffff"
 
         style = f"""
             QTextBrowser {{
@@ -425,6 +437,8 @@ class MessageWidget(QWidget):
                 font-size: 14px;
                 line-height: 1.6;
                 font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+                selection-background-color: {selection_bg};
+                selection-color: {selection_fg};
             }}
         """
         self.bubble.setStyleSheet(style)
