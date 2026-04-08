@@ -344,11 +344,19 @@ class OllamaClient:
             from src.services.settings_manager import settings_manager as _sm
             options: dict = {
                 'num_thread': _get_num_threads(),
-                'num_gpu':    _sm.get('num_gpu', -1),
                 'num_batch':  _sm.get('num_batch', 512),
                 'f16_kv':     _sm.get('f16_kv', True),
                 'use_mlock':  _sm.get('use_mlock', False),
             }
+
+            # Auto mode: omit num_gpu so Ollama decides CPU/GPU placement.
+            # Explicit values: 0 = CPU only, N > 0 = exactly N layers on GPU.
+            num_gpu = _sm.get('num_gpu', -1)
+            if isinstance(num_gpu, int) and num_gpu >= 0:
+                options['num_gpu'] = num_gpu
+                print(f"[ChatStream] Using explicit num_gpu={num_gpu} for {model}")
+            else:
+                print(f"[ChatStream] Using automatic device placement for {model}")
             if num_ctx is not None:
                 options['num_ctx'] = num_ctx
                 print(f"[ChatStream] Using num_ctx={num_ctx} for {model}")

@@ -121,7 +121,7 @@ class SettingsDialog(QDialog):
         self.gpu_layers_spin.setSpecialValueText("Auto")   # shown when value == -1
         self.gpu_layers_spin.setToolTip(
             "Number of model layers to offload to GPU.\n"
-            "Auto = offload everything that fits in VRAM.\n"
+            "Auto = let Ollama decide CPU/GPU placement.\n"
             "0 = CPU only.  N = offload exactly N layers."
         )
         perf_layout.addRow("GPU Layers:", self.gpu_layers_spin)
